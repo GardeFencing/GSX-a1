@@ -20,7 +20,7 @@ import torch
 from torch import nn
 
 try:
-    from transformers.modeling_bert import (
+    from transformers.models.bert.modeling_bert import (
         BertPreTrainedModel,
         BertModel,
         BertEncoder,
