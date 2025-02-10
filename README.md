@@ -240,36 +240,3 @@ Please cite as:
   year = {2019},
 }
 ```
-
-# VidCLIPChatbot
-
-A chatbot for analyzing fencing videos using VideoCLIP and RAG.
-
-## Installation
-
-1. Create and activate a virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows use: venv\Scripts\activate
-```
-
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-3. Download the S3D model:
-```bash
-# Create the pretrained_models directory
-mkdir -p pretrained_models
-
-# Download the S3D model files
-wget -P pretrained_models https://www.rocq.inria.fr/cluster-willow/amiech/howto100m/s3d_howto100m.pth
-wget -P pretrained_models https://www.rocq.inria.fr/cluster-willow/amiech/howto100m/s3d_dict.npy
-```
-
-Note: The S3D model files are large (>100MB) and are managed using Git LFS. If you're cloning the repository, make sure you have Git LFS installed and run `git lfs pull` to download the model files.
-
-## Usage
-
-[Rest of README content...]

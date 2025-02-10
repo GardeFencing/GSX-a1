@@ -1,10 +1,8 @@
 # JetBrains PyCharm IDE
 .idea/
 
-# S3D model files
-pretrained_models/
-**/s3d_howto100m.pth
-**/dict.npy
+#s3h model
+pretrained_models/s3d_howto100m.pth
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

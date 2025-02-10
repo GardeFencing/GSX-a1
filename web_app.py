@@ -422,66 +422,86 @@ Key Metrics:
             orig_fps = cap.get(cv2.CAP_PROP_FPS)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             
-            # Calculate frame sampling interval
-            sample_interval = max(1, int(orig_fps / target_fps))
+            # Increase frame sampling interval for faster processing
+            # Process 3 frames per second for smoother analysis while maintaining speed
+            sample_interval = max(1, int(orig_fps / 3))
             
-            # Process frames
-            frame_idx = 0
+            # Pre-allocate lists for better memory efficiency
+            estimated_frames = total_frames // sample_interval
             self.frames = []
             self.frame_angles = []
             self.frame_captions = []
             
-            # Process frames in batches
-            batch_size = 5
+            # Larger batch size for more efficient processing
+            batch_size = 10  # Increased from 5
             current_batch = []
             batch_start_idx = 0
             
-            with tqdm(total=total_frames//sample_interval, desc="Processing frames") as pbar:
-                while True:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                        
-                    if frame_idx % sample_interval == 0:
-                        try:
-                            # Convert BGR to RGB
-                            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # Use ThreadPoolExecutor for parallel frame processing
+            with ThreadPoolExecutor(max_workers=8) as executor:  # Increased workers
+                futures = []
+                
+                with tqdm(total=total_frames//sample_interval, desc="Processing frames") as pbar:
+                    frame_idx = 0
+                    while True:
+                        ret, frame = cap.read()
+                        if not ret:
+                            break
                             
-                            # Get pose estimation
-                            keypoints, angles = self.pose_estimator.estimate_pose(frame_rgb)
-                            
-                            # Draw pose on frame if keypoints exist
-                            if keypoints is not None and angles is not None:
-                                annotated_frame = frame_rgb.copy()
-                                annotated_frame = self.pose_estimator.draw_pose(annotated_frame, keypoints, angles)
-                            else:
-                                annotated_frame = frame_rgb
-                            
-                            # Add to current batch
-                            current_batch.append(annotated_frame)
-                            self.frames.append(annotated_frame)
-                            self.frame_angles.append(angles)
-                            
-                            # Process batch if full
-                            if len(current_batch) >= batch_size:
-                                # Process the batch
-                                self._process_frame_batch(current_batch, batch_start_idx)
+                        if frame_idx % sample_interval == 0:
+                            try:
+                                # Convert BGR to RGB
+                                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                                 
-                                # Reset batch
-                                current_batch = []
-                                batch_start_idx = len(self.frames)
-                            
-                            pbar.update(1)
-                            
-                        except Exception as e:
-                            logger.error(f"Error processing frame {frame_idx}: {str(e)}")
-                            continue
-                            
-                    frame_idx += 1
-            
-            # Process remaining frames
-            if current_batch:
-                self._process_frame_batch(current_batch, batch_start_idx)
+                                # Get pose estimation
+                                keypoints, angles = self.pose_estimator.estimate_pose(frame_rgb)
+                                
+                                # Draw pose on frame if keypoints exist
+                                if keypoints is not None and angles is not None:
+                                    annotated_frame = frame_rgb.copy()
+                                    annotated_frame = self.pose_estimator.draw_pose(annotated_frame, keypoints, angles)
+                                else:
+                                    annotated_frame = frame_rgb
+                                
+                                # Add to current batch
+                                current_batch.append(annotated_frame)
+                                self.frames.append(annotated_frame)
+                                self.frame_angles.append(angles)
+                                
+                                # Process batch if full
+                                if len(current_batch) >= batch_size:
+                                    # Submit batch processing to thread pool
+                                    future = executor.submit(
+                                        self._process_frame_batch,
+                                        current_batch.copy(),
+                                        batch_start_idx
+                                    )
+                                    futures.append(future)
+                                    
+                                    # Reset batch
+                                    current_batch = []
+                                    batch_start_idx = len(self.frames)
+                                
+                                pbar.update(1)
+                                
+                            except Exception as e:
+                                logger.error(f"Error processing frame {frame_idx}: {str(e)}")
+                                continue
+                                
+                        frame_idx += 1
+                
+                # Process remaining frames
+                if current_batch:
+                    future = executor.submit(
+                        self._process_frame_batch,
+                        current_batch,
+                        batch_start_idx
+                    )
+                    futures.append(future)
+                
+                # Wait for all batches to complete
+                for future in futures:
+                    future.result()
             
             cap.release()
             logger.info(f"Processed {len(self.frames)} frames")
