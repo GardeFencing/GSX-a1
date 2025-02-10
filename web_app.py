@@ -359,28 +359,22 @@ class VideoProcessor:
                 sequence_analysis = self.movement_analyzer.analyze_sequence(frame_window)
                 
                 context = {
-                    "movement_phase": {
-                        "sequence": sequence_analysis["sequence"],
-                        "phase": sequence_analysis["phase"],
-                        "confidence": sequence_analysis["confidence"],
-                        "temporal_context": sequence_analysis["temporal_context"]
-                    },
+                    "movement_phase": sequence_analysis["phase"],
+                    "sequence_type": sequence_analysis["sequence"],
+                    "angles": frame_data['angles'],
                     "biomechanics": {
-                        "power_generation": biomech_analysis.power_generation,
-                        "balance_control": biomech_analysis.balance_control,
-                        "movement_efficiency": biomech_analysis.movement_efficiency,
-                        "coordination": biomech_analysis.coordination,
-                        "technical_mastery": biomech_analysis.technical_mastery
-                    },
-                    "current_angles": frame_data['angles']
+                        "power": biomech_analysis.power_generation,
+                        "balance": biomech_analysis.balance_control,
+                        "efficiency": biomech_analysis.movement_efficiency
+                    }
                 }
                 
                 prompt = f"""Analyze this fencing frame:
-Movement: {context['movement_phase']['sequence']} - {context['movement_phase']['phase']}
+Phase: {context['movement_phase']} - {context['sequence_type']}
 Angles: Sword arm {frame_data['angles']['sword_arm']:.1f}°, Front knee {frame_data['angles']['front_knee']:.1f}°
-Quality: Power {context['biomechanics']['power_generation']:.2f}, Balance {context['biomechanics']['balance_control']:.2f}
+Technical focus: Power {context['biomechanics']['power']:.2f}, Balance {context['biomechanics']['balance']:.2f}
 
-Describe the pose and quality in 2-3 sentences. Focus on key technical aspects."""
+Provide a concise technical analysis focusing on form and execution."""
                 
                 batch_contexts.append(context)
                 batch_prompts.append(prompt)
@@ -396,23 +390,17 @@ Describe the pose and quality in 2-3 sentences. Focus on key technical aspects."
                     logger.error(f"Error in GardeRAG query: {str(e)}")
                     responses.append("Error analyzing pose")
             
-            # Create captions for the batch
+            # Create focused technical captions
             for i, (pose_description, context) in enumerate(zip(responses, batch_contexts)):
-                biomech = context["biomechanics"]
-                movement = context["movement_phase"]
-                
-                caption = f"""Technical Metrics:
-Power Generation: {biomech['power_generation']:.2f}
-Balance Control: {biomech['balance_control']:.2f}
-Movement Efficiency: {biomech['movement_efficiency']:.2f}
-Coordination: {biomech['coordination']:.2f}
-Overall Mastery: {biomech['technical_mastery']:.2f}
+                caption = f"""Movement: {context['sequence_type']} - {context['movement_phase']}
 
-Pose Analysis:
+Technical Analysis:
 {pose_description}
 
-Movement Phase: {movement['sequence']} - {movement['phase']}
-{movement['temporal_context']}"""
+Key Metrics:
+- Power: {context['biomechanics']['power']:.2f}
+- Balance: {context['biomechanics']['balance']:.2f}
+- Efficiency: {context['biomechanics']['efficiency']:.2f}"""
                 
                 self.frame_captions.append(caption)
             
@@ -577,136 +565,54 @@ def chat():
         # Perform biomechanical analysis
         biomech_analysis = video_processor.biomech_analyzer.analyze_movement(frame_window[-1])
         
-        # Create rich context for RAG
+        # Create focused context for RAG
         context = {
-            "movement_phase": {
-                "sequence": sequence_analysis["sequence"],
+            "current_movement": {
                 "phase": sequence_analysis["phase"],
-                "confidence": sequence_analysis["confidence"],
-                "temporal_context": sequence_analysis["temporal_context"]
+                "type": sequence_analysis["sequence"],
+                "confidence": sequence_analysis["confidence"]
             },
-            "biomechanics": {
-                "power_generation": biomech_analysis.power_generation,
-                "balance_control": biomech_analysis.balance_control,
-                "movement_efficiency": biomech_analysis.movement_efficiency,
-                "coordination": biomech_analysis.coordination,
-                "technical_mastery": biomech_analysis.technical_mastery
+            "technical_metrics": {
+                "power": biomech_analysis.power_generation,
+                "balance": biomech_analysis.balance_control,
+                "efficiency": biomech_analysis.movement_efficiency
             },
             "current_angles": frame_window[-1]['angles']
         }
         
-        # Determine the type of question and create appropriate prompt
-        if any(word in query for word in ['hi', 'hello', 'hey']):
-            prompt = """You are a friendly fencing coach. The student just said hello.
-Give a warm, brief greeting and ask how you can help them with their fencing technique today.
-Keep it casual and encouraging, like a real coach."""
+        # Create focused prompt based on query type
+        if "what" in query and ("doing" in query or "movement" in query or "action" in query):
+            prompt = f"""Current Movement Analysis:
+Phase: {context['current_movement']['phase']}
+Type: {context['current_movement']['type']}
+Angles: Sword arm {context['current_angles']['sword_arm']:.1f}°, Front knee {context['current_angles']['front_knee']:.1f}°
+
+Provide a concise technical description of the current movement and form."""
             
-        elif any(word in query for word in ['what am i doing', 'what actions', 'what movement']):
-            prompt = f"""You are a friendly fencing coach. The student wants to know what movements they're performing.
-Current Movement Sequence: {sequence_analysis['temporal_context']}
-Current Phase: {context['movement_phase']['sequence']} - {context['movement_phase']['phase']}
-
-Describe what they're doing in simple, clear terms. Focus on the actual movements first, then maybe ONE key observation about their form.
-Keep it conversational, like you're watching them in person.
-
-Example: "You're working on a lunge sequence. I can see you preparing with good back leg positioning, though you might want to adjust your sword arm a bit."
-"""
         else:
-            # Default coaching prompt for other questions
-            prompt = f"""You are a friendly fencing coach having a conversation with your student.
+            prompt = f"""Technical Analysis Request:
+Movement: {context['current_movement']['type']} - {context['current_movement']['phase']}
+Metrics: Power {context['technical_metrics']['power']:.2f}, Balance {context['technical_metrics']['balance']:.2f}
+Query: {query}
 
-Current Movement: {context['movement_phase']['sequence']} - {context['movement_phase']['phase']}
-Technical Context:
-- Power Generation: {context['biomechanics']['power_generation']:.2f}
-- Balance Control: {context['biomechanics']['balance_control']:.2f}
-- Movement Efficiency: {context['biomechanics']['movement_efficiency']:.2f}
-- Coordination: {context['biomechanics']['coordination']:.2f}
-
-Student Question: {query}
-
-Answer like a real coach would in person:
-1. Be conversational and encouraging
-2. Address their question directly
-3. Maybe add ONE specific tip if relevant
-4. Keep it natural - don't list numbers unless specifically asked
-
-Example: "That's a good question! Your lunge is looking strong, but try focusing on extending your sword arm fully before pushing off."
-"""
+Provide a focused technical response addressing the query."""
         
         try:
-            # Process in batches to avoid rate limiting
-            max_retries = 3
-            retry_delay = 2
+            result = garde_rag.query(prompt, context)
+            feedback = result.get("response", "")
             
-            async def process_rag_request():
-                try:
-                    result = garde_rag.query(prompt, context)
-                    pose_description = result.get("response", "")
-                    return pose_description
-                except Exception as e:
-                    logger.error(f"Error in GardeRAG query: {str(e)}")
-                    return None
+            # Clean up response to be more technical and focused
+            feedback = feedback.replace("As a fencing coach, ", "")
+            feedback = feedback.replace("I can see that ", "")
+            feedback = feedback.replace("I notice that ", "")
+            feedback = feedback.strip()
             
-            # Create event loop for async processing
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            for attempt in range(max_retries):
-                try:
-                    feedback = loop.run_until_complete(process_rag_request())
-                    if feedback:
-                        # Format the feedback
-                        def format_coaching_feedback(text):
-                            # Remove verbose patterns
-                            patterns = [
-                                "As a fencing coach, ",
-                                "Based on the video, ",
-                                "I can observe that ",
-                                "It's important to note that ",
-                                "I notice that ",
-                                "I see that ",
-                                "Your ",
-                                "I would ",
-                                "Let me "
-                            ]
-                            for pattern in patterns:
-                                text = text.replace(pattern, "")
-                            
-                            # Clean up any leftover artifacts
-                            text = text.strip()
-                            if text.lower().startswith("your"):
-                                text = text[4:].strip()
-                            if text.lower().startswith("i see"):
-                                text = text[5:].strip()
-                            if text.lower().startswith("i notice"):
-                                text = text[8:].strip()
-                            
-                            # Capitalize first letter
-                            text = text[0].upper() + text[1:]
-                            
-                            return text
-                        
-                        feedback = format_coaching_feedback(feedback)
-                        
-                        return jsonify({'response': feedback})
-                    
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay * (attempt + 1))
-                        continue
-                    else:
-                        return jsonify({'error': 'Error generating coaching feedback'}), 500
-                        
-                except Exception as e:
-                    if attempt == max_retries - 1:
-                        logger.error(f"Error in chat: {str(e)}")
-                        return jsonify({'error': str(e)}), 500
-                    time.sleep(retry_delay * (attempt + 1))
-                    
-            loop.close()
+            return jsonify({'response': feedback})
             
         except Exception as e:
             logger.error(f"Error in chat: {str(e)}")
             return jsonify({'error': str(e)}), 500
+            
     except Exception as e:
         logger.error(f"Error in chat: {str(e)}")
         return jsonify({'error': str(e)}), 500
