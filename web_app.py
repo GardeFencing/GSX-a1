@@ -21,10 +21,12 @@ import aiohttp
 from transformers import CLIPProcessor, CLIPModel
 from sentence_transformers import SentenceTransformer
 from pose_estimator import PoseEstimator, JointAngles
+from GardeRAG.model import GardeRAG  # Import GardeRAG
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
 video_processor = None  # Global VideoProcessor instance
+garde_rag = None  # Global GardeRAG instance
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -39,6 +41,16 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
 clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 sent_transformer = SentenceTransformer("all-MiniLM-L6-v2", device=device)
+
+# Initialize GardeRAG
+def init_garde_rag():
+    global garde_rag
+    if garde_rag is None:
+        garde_rag = GardeRAG()
+        logger.info("GardeRAG initialized successfully")
+
+# Call initialization
+init_garde_rag()
 
 # ------------------------------------------------------------------------------
 # BIOMECHANICAL ANALYSIS
@@ -304,118 +316,92 @@ class VideoProcessor:
         self.pose_estimator = PoseEstimator()
         self.frames = []
         self.frame_angles = []
-        self.frame_captions = []  # Store pre-processed captions
+        self.frame_captions = []
         self.biomech_analyzer = BiomechanicalAnalyzer()
         self.movement_analyzer = MovementAnalyzer()
         self.executor = ThreadPoolExecutor(max_workers=4)
         
-    async def _process_frame_batch(self, frame_batch, start_idx):
-        """Process a batch of frames with RAG API"""
+    def _process_frame_batch(self, frame_batch, start_idx):
+        """Process a batch of frames using local GardeRAG"""
         try:
-            async with aiohttp.ClientSession() as session:
-                batch_contexts = []
-                batch_prompts = []
+            batch_contexts = []
+            batch_prompts = []
+            
+            # Prepare contexts and prompts for the batch
+            for i, (frame, angles) in enumerate(zip(frame_batch, self.frame_angles[start_idx:start_idx + len(frame_batch)])):
+                frame_idx = start_idx + i
                 
-                # Prepare contexts and prompts for the batch
-                for i, (frame, angles) in enumerate(zip(frame_batch, self.frame_angles[start_idx:start_idx + len(frame_batch)])):
-                    frame_idx = start_idx + i
-                    
-                    # Get frame window for sequence context
-                    window_start = max(0, frame_idx - 2)
-                    frame_window = []
-                    for idx in range(window_start, frame_idx + 1):
-                        if idx < len(self.frame_angles) and self.frame_angles[idx] is not None:
-                            curr_angles = self.frame_angles[idx]
-                            frame_window.append({
-                                'angles': {
-                                    'sword_arm': curr_angles.sword_arm_angle if curr_angles.sword_arm_angle is not None else 0.0,
-                                    'front_knee': curr_angles.front_knee_angle if curr_angles.front_knee_angle is not None else 0.0,
-                                    'back_knee': curr_angles.back_knee_angle if curr_angles.back_knee_angle is not None else 0.0,
-                                    'torso': curr_angles.torso_angle if curr_angles.torso_angle is not None else 0.0
-                                }
-                            })
-                    
-                    # Get biomechanical and sequence analysis
-                    frame_data = {
-                        'angles': {
-                            'sword_arm': angles.sword_arm_angle if angles.sword_arm_angle is not None else 0.0,
-                            'front_knee': angles.front_knee_angle if angles.front_knee_angle is not None else 0.0,
-                            'back_knee': angles.back_knee_angle if angles.back_knee_angle is not None else 0.0,
-                            'torso': angles.torso_angle if angles.torso_angle is not None else 0.0
-                        }
+                # Get frame window for sequence context
+                window_start = max(0, frame_idx - 2)
+                frame_window = []
+                for idx in range(window_start, frame_idx + 1):
+                    if idx < len(self.frame_angles) and self.frame_angles[idx] is not None:
+                        curr_angles = self.frame_angles[idx]
+                        frame_window.append({
+                            'angles': {
+                                'sword_arm': curr_angles.sword_arm_angle if curr_angles.sword_arm_angle is not None else 0.0,
+                                'front_knee': curr_angles.front_knee_angle if curr_angles.front_knee_angle is not None else 0.0,
+                                'back_knee': curr_angles.back_knee_angle if curr_angles.back_knee_angle is not None else 0.0,
+                                'torso': curr_angles.torso_angle if curr_angles.torso_angle is not None else 0.0
+                            }
+                        })
+                
+                # Get biomechanical and sequence analysis
+                frame_data = {
+                    'angles': {
+                        'sword_arm': angles.sword_arm_angle if angles.sword_arm_angle is not None else 0.0,
+                        'front_knee': angles.front_knee_angle if angles.front_knee_angle is not None else 0.0,
+                        'back_knee': angles.back_knee_angle if angles.back_knee_angle is not None else 0.0,
+                        'torso': angles.torso_angle if angles.torso_angle is not None else 0.0
                     }
-                    biomech_analysis = self.biomech_analyzer.analyze_movement(frame_data)
-                    sequence_analysis = self.movement_analyzer.analyze_sequence(frame_window)
-                    
-                    context = {
-                        "movement_phase": {
-                            "sequence": sequence_analysis["sequence"],
-                            "phase": sequence_analysis["phase"],
-                            "confidence": sequence_analysis["confidence"],
-                            "temporal_context": sequence_analysis["temporal_context"]
-                        },
-                        "biomechanics": {
-                            "power_generation": biomech_analysis.power_generation,
-                            "balance_control": biomech_analysis.balance_control,
-                            "movement_efficiency": biomech_analysis.movement_efficiency,
-                            "coordination": biomech_analysis.coordination,
-                            "technical_mastery": biomech_analysis.technical_mastery
-                        },
-                        "current_angles": frame_data['angles']
-                    }
-                    
-                    prompt = f"""Analyze this fencing frame:
+                }
+                biomech_analysis = self.biomech_analyzer.analyze_movement(frame_data)
+                sequence_analysis = self.movement_analyzer.analyze_sequence(frame_window)
+                
+                context = {
+                    "movement_phase": {
+                        "sequence": sequence_analysis["sequence"],
+                        "phase": sequence_analysis["phase"],
+                        "confidence": sequence_analysis["confidence"],
+                        "temporal_context": sequence_analysis["temporal_context"]
+                    },
+                    "biomechanics": {
+                        "power_generation": biomech_analysis.power_generation,
+                        "balance_control": biomech_analysis.balance_control,
+                        "movement_efficiency": biomech_analysis.movement_efficiency,
+                        "coordination": biomech_analysis.coordination,
+                        "technical_mastery": biomech_analysis.technical_mastery
+                    },
+                    "current_angles": frame_data['angles']
+                }
+                
+                prompt = f"""Analyze this fencing frame:
 Movement: {context['movement_phase']['sequence']} - {context['movement_phase']['phase']}
 Angles: Sword arm {frame_data['angles']['sword_arm']:.1f}°, Front knee {frame_data['angles']['front_knee']:.1f}°
 Quality: Power {context['biomechanics']['power_generation']:.2f}, Balance {context['biomechanics']['balance_control']:.2f}
 
 Describe the pose and quality in 2-3 sentences. Focus on key technical aspects."""
-                    
-                    batch_contexts.append(context)
-                    batch_prompts.append(prompt)
                 
-                # Process batch with RAG API
-                tasks = []
-                for prompt, context in zip(batch_prompts, batch_contexts):
-                    tasks.append(
-                        session.post(
-                            "http://54.227.20.42/query",
-                            json={
-                                "query": prompt,
-                                "context": context,
-                                "max_tokens": 75,
-                                "temperature": 0.3
-                            },
-                            timeout=30
-                        )
-                    )
+                batch_contexts.append(context)
+                batch_prompts.append(prompt)
+            
+            # Process batch with local GardeRAG
+            responses = []
+            for prompt, context in zip(batch_prompts, batch_contexts):
+                try:
+                    result = garde_rag.query(prompt, context)
+                    pose_description = result.get("response", "")
+                    responses.append(pose_description)
+                except Exception as e:
+                    logger.error(f"Error in GardeRAG query: {str(e)}")
+                    responses.append("Error analyzing pose")
+            
+            # Create captions for the batch
+            for i, (pose_description, context) in enumerate(zip(responses, batch_contexts)):
+                biomech = context["biomechanics"]
+                movement = context["movement_phase"]
                 
-                # Wait for all responses with rate limiting
-                responses = []
-                for i, task in enumerate(tasks):
-                    try:
-                        async with task as response:
-                            if response.status == 200:
-                                result = await response.json()
-                                pose_description = result.get("response", "")
-                            else:
-                                pose_description = "Error getting pose description"
-                            responses.append(pose_description)
-                            
-                            # Add delay between requests
-                            if i < len(tasks) - 1:
-                                await asyncio.sleep(0.2)  # 200ms delay between requests
-                                
-                    except Exception as e:
-                        logger.error(f"Error in RAG API request: {str(e)}")
-                        responses.append("Error analyzing pose")
-                
-                # Create captions for the batch
-                for i, (pose_description, context) in enumerate(zip(responses, batch_contexts)):
-                    biomech = context["biomechanics"]
-                    movement = context["movement_phase"]
-                    
-                    caption = f"""Technical Metrics:
+                caption = f"""Technical Metrics:
 Power Generation: {biomech['power_generation']:.2f}
 Balance Control: {biomech['balance_control']:.2f}
 Movement Efficiency: {biomech['movement_efficiency']:.2f}
@@ -427,9 +413,9 @@ Pose Analysis:
 
 Movement Phase: {movement['sequence']} - {movement['phase']}
 {movement['temporal_context']}"""
-                    
-                    self.frame_captions.append(caption)
                 
+                self.frame_captions.append(caption)
+            
         except Exception as e:
             logger.error(f"Error processing frame batch: {str(e)}")
             return ["Error analyzing pose"] * len(frame_batch)
@@ -490,13 +476,8 @@ Movement Phase: {movement['sequence']} - {movement['phase']}
                             
                             # Process batch if full
                             if len(current_batch) >= batch_size:
-                                # Create event loop for async processing
-                                loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop)
-                                
                                 # Process the batch
-                                loop.run_until_complete(self._process_frame_batch(current_batch, batch_start_idx))
-                                loop.close()
+                                self._process_frame_batch(current_batch, batch_start_idx)
                                 
                                 # Reset batch
                                 current_batch = []
@@ -512,10 +493,7 @@ Movement Phase: {movement['sequence']} - {movement['phase']}
             
             # Process remaining frames
             if current_batch:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(self._process_frame_batch(current_batch, batch_start_idx))
-                loop.close()
+                self._process_frame_batch(current_batch, batch_start_idx)
             
             cap.release()
             logger.info(f"Processed {len(self.frames)} frames")
@@ -661,31 +639,13 @@ Example: "That's a good question! Your lunge is looking strong, but try focusing
             retry_delay = 2
             
             async def process_rag_request():
-                async with aiohttp.ClientSession() as session:
-                    try:
-                        async with session.post(
-                            "http://54.227.20.42/query",
-                            json={
-                                "query": prompt,
-                                "context": context,
-                                "max_tokens": 100,
-                                "temperature": 0.7,  # Increased for more natural variation
-                                "response_format": {
-                                    "type": "text",
-                                    "max_length": 200
-                                }
-                            },
-                            timeout=30
-                        ) as response:
-                            if response.status == 200:
-                                result = await response.json()
-                                return result.get("response", "")
-                            else:
-                                logger.error(f"RAG API error: {response.status}")
-                                return None
-                    except Exception as e:
-                        logger.error(f"RAG API request error: {str(e)}")
-                        return None
+                try:
+                    result = garde_rag.query(prompt, context)
+                    pose_description = result.get("response", "")
+                    return pose_description
+                except Exception as e:
+                    logger.error(f"Error in GardeRAG query: {str(e)}")
+                    return None
             
             # Create event loop for async processing
             loop = asyncio.new_event_loop()

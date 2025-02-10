@@ -3,9 +3,13 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_hub as hub
 import logging
+import os
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Dict
 from collections import deque
+
+# Set tokenizers parallelism explicitly
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -64,9 +68,37 @@ class PoseEstimator:
         self.input_size = 192  # MoveNet Lightning input size
         self.confidence_threshold = 0.2
         
-        # Load MoveNet model
-        model = hub.load('https://tfhub.dev/google/movenet/singlepose/lightning/4')
-        self.movenet = model.signatures['serving_default']
+        # Set up model cache directory
+        cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        os.environ["TFHUB_CACHE_DIR"] = cache_dir
+        
+        try:
+            # Model handle for MoveNet Lightning
+            model_handle = "https://tfhub.dev/google/movenet/singlepose/lightning/4"
+            model_path = os.path.join(cache_dir, "movenet_lightning")
+            
+            # Always download a fresh model to ensure proper initialization
+            logger.info("Downloading MoveNet model...")
+            model = hub.load(model_handle)
+            
+            # Get the concrete function directly
+            self.movenet = model.signatures['serving_default']
+            
+            # Save model for future use
+            logger.info("Saving model to cache...")
+            tf.saved_model.save(model, model_path)
+            
+            # Verify input tensor name
+            input_details = list(self.movenet.structured_input_signature[1].keys())[0]
+            logger.info(f"Model loaded successfully. Input tensor name: {input_details}")
+            
+            # Store input tensor name for later use
+            self.input_tensor_name = input_details
+            
+        except Exception as e:
+            logger.error(f"Error loading MoveNet model: {str(e)}")
+            raise RuntimeError(f"Failed to initialize MoveNet model: {str(e)}")
         
         # Initialize motion tracking
         self.sequence_length = sequence_length
@@ -93,6 +125,31 @@ class PoseEstimator:
         }
         logger.info("Pose estimator initialized with motion tracking")
 
+    def _convert_normalized_to_pixel(self, x_norm: float, y_norm: float, orig_width: int, orig_height: int) -> Tuple[int, int]:
+        """
+        Convert normalized coordinates from the padded input image back to the original frame coordinates.
+        """
+        target = self.input_size  # e.g., 192
+        # Compute scaling factor and padding offsets
+        scale = min(target / orig_height, target / orig_width)
+        new_height = orig_height * scale
+        new_width = orig_width * scale
+        pad_top = (target - new_height) / 2
+        pad_left = (target - new_width) / 2
+
+        # Convert normalized coordinates to absolute coordinates in the padded image
+        x_abs = x_norm * target
+        y_abs = y_norm * target
+
+        # Remove padding and scale back to original image dimensions
+        x_orig = (x_abs - pad_left) / scale
+        y_orig = (y_abs - pad_top) / scale
+
+        # Ensure coordinates are within bounds
+        x_orig = int(np.clip(x_orig, 0, orig_width - 1))
+        y_orig = int(np.clip(y_orig, 0, orig_height - 1))
+        return x_orig, y_orig
+
     def _filter_keypoints(self, keypoints):
         """Filter keypoints based on confidence threshold and convert to frame coordinates"""
         filtered_keypoints = []
@@ -112,6 +169,7 @@ class PoseEstimator:
     def _get_keypoints(self, frame):
         """Get keypoints from frame using MoveNet model"""
         try:
+            orig_height, orig_width = frame.shape[:2]
             # Resize and pad the image to keep the aspect ratio and fit the expected size
             input_image = tf.expand_dims(frame, axis=0)
             input_image = tf.image.resize_with_pad(input_image, self.input_size, self.input_size)
@@ -119,23 +177,21 @@ class PoseEstimator:
             # Convert to int32 (expected by the model)
             input_image = tf.cast(input_image, dtype=tf.int32)
             
-            # Run model inference
-            outputs = self.movenet(input_image)
+            # Run model inference with the correct input tensor name
+            input_tensor_name = list(self.movenet.structured_input_signature[1].keys())[0]
+            outputs = self.movenet(**{input_tensor_name: input_image})
             
             # Process the outputs
             keypoints = outputs['output_0'].numpy()
             keypoints = np.squeeze(keypoints)  # Remove batch dimension
             
-            # Convert keypoints to the correct format
             processed_keypoints = []
-            height, width = frame.shape[:2]
             
             for kp in keypoints:
                 y, x, confidence = kp
                 if confidence > self.confidence_threshold:
-                    # Convert normalized coordinates to pixel coordinates
-                    x_px = int(x * width)
-                    y_px = int(y * height)
+                    # Convert normalized coordinates to pixel coordinates using the helper function
+                    x_px, y_px = self._convert_normalized_to_pixel(x, y, orig_width, orig_height)
                     processed_keypoints.append([x_px, y_px, confidence])
                 else:
                     processed_keypoints.append(None)
@@ -276,43 +332,29 @@ class PoseEstimator:
     def estimate_pose(self, frame):
         """Estimate pose in a frame and return keypoints with joint angles"""
         try:
-            # Get original frame dimensions
-            height, width = frame.shape[:2]
+            orig_height, orig_width = frame.shape[:2]
+            
+            # Process frame to RGB
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             
             # Resize frame to model input size while maintaining aspect ratio
-            input_image = tf.expand_dims(frame, axis=0)
+            input_image = tf.expand_dims(frame_rgb, axis=0)
             input_image = tf.image.resize_with_pad(input_image, self.input_size, self.input_size)
-            
-            # Convert to int32 (expected by the model)
             input_image = tf.cast(input_image, dtype=tf.int32)
             
-            # Run model inference
-            outputs = self.movenet(input_image)
+            # Run model inference using stored input tensor name
+            outputs = self.movenet(**{self.input_tensor_name: input_image})
             keypoints = outputs['output_0'].numpy()
             keypoints = np.squeeze(keypoints)  # Remove batch dimension
             
-            # Convert normalized coordinates to pixel coordinates
             processed_keypoints = []
-            
-            # Get padding info from resize_with_pad
-            scale = min(self.input_size / height, self.input_size / width)
-            scaled_height = int(height * scale)
-            scaled_width = int(width * scale)
-            pad_height = (self.input_size - scaled_height) // 2
-            pad_width = (self.input_size - scaled_width) // 2
             
             for kp in keypoints:
                 y, x, confidence = kp
                 if confidence > self.confidence_threshold:
-                    # Remove padding and scale back to original dimensions
-                    x_orig = ((x * self.input_size - pad_width) / scaled_width) * width
-                    y_orig = ((y * self.input_size - pad_height) / scaled_height) * height
-                    
-                    # Ensure coordinates are within frame bounds
-                    x_orig = np.clip(x_orig, 0, width - 1)
-                    y_orig = np.clip(y_orig, 0, height - 1)
-                    
-                    processed_keypoints.append([x_orig, y_orig, confidence])
+                    # Convert using the helper so that we correctly account for padding/scale
+                    x_px, y_px = self._convert_normalized_to_pixel(x, y, orig_width, orig_height)
+                    processed_keypoints.append([x_px, y_px, confidence])
                 else:
                     processed_keypoints.append(None)
             
@@ -329,86 +371,88 @@ class PoseEstimator:
         """Draw pose keypoints and angles on the frame."""
         try:
             annotated_frame = frame.copy()
+            height, width = frame.shape[:2]
+            
+            # Define colors
+            KEYPOINT_COLOR = (0, 255, 0)  # Green
+            CONNECTION_COLOR = (0, 255, 255)  # Yellow
+            TEXT_COLOR = (255, 255, 255)  # White
+            
+            # Draw connections first (so they appear behind keypoints)
+            connections = [
+                # Torso
+                ([5, 6], (0, 0, 255)),   # Shoulders (Red)
+                ([5, 11], (0, 0, 255)),  # Left torso
+                ([6, 12], (0, 0, 255)),  # Right torso
+                ([11, 12], (0, 0, 255)), # Hips
+                # Arms
+                ([5, 7, 9], (255, 0, 0)),   # Left arm (Blue)
+                ([6, 8, 10], (255, 0, 0)),  # Right arm
+                # Legs
+                ([11, 13, 15], (0, 255, 0)), # Left leg (Green)
+                ([12, 14, 16], (0, 255, 0))  # Right leg
+            ]
+            
+            # Draw skeleton connections
+            for connection in connections:
+                points = connection[0]
+                color = connection[1]
+                
+                # Draw lines between consecutive points in each connection
+                for i in range(len(points) - 1):
+                    if (points[i] < len(keypoints) and points[i+1] < len(keypoints) and
+                        keypoints[points[i]] is not None and keypoints[points[i+1]] is not None):
+                        pt1 = (int(keypoints[points[i]][0]), int(keypoints[points[i]][1]))
+                        pt2 = (int(keypoints[points[i+1]][0]), int(keypoints[points[i+1]][1]))
+                        cv2.line(annotated_frame, pt1, pt2, color, 2)
             
             # Draw keypoints
             for i, keypoint in enumerate(keypoints):
-                if keypoint is not None and len(keypoint) >= 2:  # Check if keypoint exists and has x,y coordinates
+                if keypoint is not None:
                     x, y = int(keypoint[0]), int(keypoint[1])
-                    cv2.circle(annotated_frame, (x, y), 5, (0, 255, 0), -1)
+                    cv2.circle(annotated_frame, (x, y), 4, KEYPOINT_COLOR, -1)
+                    cv2.circle(annotated_frame, (x, y), 6, (0, 0, 0), 1)
             
-            # Draw connections
-            connections = [
-                [0, 1],  # nose to left eye
-                [0, 2],  # nose to right eye
-                [1, 3],  # left eye to left ear
-                [2, 4],  # right eye to right ear
-                [5, 6],  # left shoulder to right shoulder
-                [5, 7],  # left shoulder to left elbow
-                [7, 9],  # left elbow to left wrist
-                [6, 8],  # right shoulder to right elbow
-                [8, 10], # right elbow to right wrist
-                [5, 11], # left shoulder to left hip
-                [6, 12], # right shoulder to right hip
-                [11, 12], # left hip to right hip
-                [11, 13], # left hip to left knee
-                [13, 15], # left knee to left ankle
-                [12, 14], # right hip to right knee
-                [14, 16]  # right knee to right ankle
-            ]
-            
-            for start_idx, end_idx in connections:
-                if (start_idx < len(keypoints) and end_idx < len(keypoints) and 
-                    keypoints[start_idx] is not None and keypoints[end_idx] is not None and
-                    len(keypoints[start_idx]) >= 2 and len(keypoints[end_idx]) >= 2):
-                    start_point = (int(keypoints[start_idx][0]), int(keypoints[start_idx][1]))
-                    end_point = (int(keypoints[end_idx][0]), int(keypoints[end_idx][1]))
-                    cv2.line(annotated_frame, start_point, end_point, (255, 255, 0), 2)
-            
-            # Draw angles
+            # Draw angles with better positioning and visibility
             font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.5
-            thickness = 1
+            font_scale = 0.6
+            thickness = 2
+            
+            def put_outlined_text(img, text, pos, font, scale, color, thickness):
+                # Draw black outline
+                cv2.putText(img, text, pos, font, scale, (0, 0, 0), thickness + 1)
+                # Draw text in color
+                cv2.putText(img, text, pos, font, scale, color, thickness)
             
             # Draw sword arm angle
-            if (angles.sword_arm_angle is not None and 8 < len(keypoints) and 
-                keypoints[8] is not None and len(keypoints[8]) >= 2):
-                sword_elbow_idx = 8  # Right elbow
-                x = int(keypoints[sword_elbow_idx][0])
-                y = int(keypoints[sword_elbow_idx][1])
-                cv2.putText(annotated_frame, f"Sword: {angles.sword_arm_angle:.1f}°",
-                           (x + 10, y), font, font_scale, (0, 255, 0), thickness)
+            if angles.sword_arm_angle is not None and keypoints[8] is not None:
+                x, y = int(keypoints[8][0]), int(keypoints[8][1])
+                text = f"{angles.sword_arm_angle:.1f}°"
+                put_outlined_text(annotated_frame, text, (x + 10, y), font, font_scale, TEXT_COLOR, thickness)
             
             # Draw front knee angle
-            if (angles.front_knee_angle is not None and 14 < len(keypoints) and 
-                keypoints[14] is not None and len(keypoints[14]) >= 2):
-                front_knee_idx = 14  # Right knee
-                x = int(keypoints[front_knee_idx][0])
-                y = int(keypoints[front_knee_idx][1])
-                cv2.putText(annotated_frame, f"Front knee: {angles.front_knee_angle:.1f}°",
-                           (x + 10, y), font, font_scale, (0, 255, 0), thickness)
+            if angles.front_knee_angle is not None and keypoints[14] is not None:
+                x, y = int(keypoints[14][0]), int(keypoints[14][1])
+                text = f"{angles.front_knee_angle:.1f}°"
+                put_outlined_text(annotated_frame, text, (x + 10, y), font, font_scale, TEXT_COLOR, thickness)
             
             # Draw back knee angle
-            if (angles.back_knee_angle is not None and 13 < len(keypoints) and 
-                keypoints[13] is not None and len(keypoints[13]) >= 2):
-                back_knee_idx = 13  # Left knee
-                x = int(keypoints[back_knee_idx][0])
-                y = int(keypoints[back_knee_idx][1])
-                cv2.putText(annotated_frame, f"Back knee: {angles.back_knee_angle:.1f}°",
-                           (x + 10, y), font, font_scale, (0, 255, 0), thickness)
+            if angles.back_knee_angle is not None and keypoints[13] is not None:
+                x, y = int(keypoints[13][0]), int(keypoints[13][1])
+                text = f"{angles.back_knee_angle:.1f}°"
+                put_outlined_text(annotated_frame, text, (x - 60, y), font, font_scale, TEXT_COLOR, thickness)
             
             # Draw torso angle
-            if (angles.torso_angle is not None and 5 < len(keypoints) and 6 < len(keypoints) and 
-                keypoints[5] is not None and keypoints[6] is not None and
-                len(keypoints[5]) >= 2 and len(keypoints[6]) >= 2):
-                mid_shoulder_x = int((keypoints[5][0] + keypoints[6][0]) / 2)  # Average of left and right shoulder
-                mid_shoulder_y = int((keypoints[5][1] + keypoints[6][1]) / 2)
-                cv2.putText(annotated_frame, f"Torso: {angles.torso_angle:.1f}°",
-                           (mid_shoulder_x + 10, mid_shoulder_y), font, font_scale, (0, 255, 0), thickness)
+            if angles.torso_angle is not None and keypoints[5] is not None and keypoints[6] is not None:
+                mid_x = int((keypoints[5][0] + keypoints[6][0]) / 2)
+                mid_y = int((keypoints[5][1] + keypoints[6][1]) / 2)
+                text = f"{angles.torso_angle:.1f}°"
+                put_outlined_text(annotated_frame, text, (mid_x - 30, mid_y - 10), font, font_scale, TEXT_COLOR, thickness)
             
             return annotated_frame
             
         except Exception as e:
-            logger.error(f"[Pose] Error drawing pose: {str(e)}")
+            logger.error(f"Error drawing pose: {str(e)}")
             return frame
 
     def _calculate_joint_angles(self, keypoints):
