@@ -3,10 +3,3 @@
     url = https://github.com/ngoyal2707/Megatron-LM
     branch = fairseq
 
-[submodule "GardeRAG"]
-    path = GardeRAG
-    url = ./GardeRAG
-
-[submodule "examples/MMPT/scripts/GardeRAG"]
-    path = examples/MMPT/scripts/GardeRAG
-    url = ./examples/MMPT/scripts/GardeRAG
