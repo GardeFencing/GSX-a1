@@ -59,65 +59,39 @@ class MotionSequence:
     technical_notes: List[str]
 
 class PoseEstimator:
-    def __init__(self, sequence_length: int = 5):
-        """Initialize MoveNet pose estimator (SinglePoseThunder)"""
-        logger.info("Initializing MoveNet pose estimator (SinglePoseThunder)...")
+    """
+    A class to handle pose estimation using MoveNet Thunder model.
+    """
+    def __init__(self, input_size: int = 256, confidence_threshold: float = 0.3):
+        """
+        Initialize the pose estimator with MoveNet Thunder model.
+        """
+        self.input_size = input_size
+        self.confidence_threshold = confidence_threshold
+        
+        # Load MoveNet Thunder model
+        model_handle = "https://tfhub.dev/google/movenet/singlepose/thunder/4"
+        self.movenet = hub.load(model_handle).signatures['serving_default']
+        logger.info("Successfully loaded MoveNet Thunder model")
 
-        self.input_size = 256  # Thunder model expects 256x256 input
-        self.confidence_threshold = 0.1  # Lower threshold to help detect legs
-
-        # We'll keep the simpler approach now: no advanced "leg side" logic
-        # If you want to do smoothing, you can still keep buffers or use tracking
-        self.leg_position_buffer = deque(maxlen=5)
-
-        # Set up model cache directory
-        cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_cache")
-        os.makedirs(cache_dir, exist_ok=True)
-        os.environ["TFHUB_CACHE_DIR"] = cache_dir
-
-        try:
-            # Model handle for MoveNet Thunder - more robust than Lightning (though slower)
-            model_handle = "https://tfhub.dev/google/movenet/singlepose/thunder/4"
-            model_path = os.path.join(cache_dir, "movenet_thunder")
-
-            logger.info("Downloading MoveNet Thunder model...")
-            model = hub.load(model_handle)
-            self.movenet = model.signatures['serving_default']
-
-            logger.info("Saving model to cache...")
-            tf.saved_model.save(model, model_path)
-
-            input_details = list(self.movenet.structured_input_signature[1].keys())[0]
-            logger.info(f"Model loaded successfully. Input tensor name: {input_details}")
-            self.input_tensor_name = input_details
-
-        except Exception as e:
-            logger.error(f"Error loading MoveNet model: {str(e)}")
-            raise RuntimeError(f"Failed to initialize MoveNet model: {str(e)}")
-
-        # Initialize motion tracking
-        self.sequence_length = sequence_length
-        self.sequence_buffer = deque(maxlen=sequence_length)
-        self.motion_sequences = []
-
-        # Define ideal angles for different phases
+        self.sequence_length = 5
+        self.sequence_buffer = deque(maxlen=self.sequence_length)
+        self.motion_sequences = []  # Initialize motion_sequences list
+        # Define ideal angles for different positions
         self.ideal_angles = {
             'en_garde': {
-                'sword_arm_angle': 135.0,
-                'front_knee_angle': 120.0,
-                'back_knee_angle': 150.0,
-                'torso_angle': 90.0,
-                'stance_width': 1.0  # Normalized
+                'sword_arm_angle': 135,  # Slightly bent elbow
+                'front_knee_angle': 150,  # Slightly bent front knee
+                'back_knee_angle': 160,  # Nearly straight back knee
+                'torso_angle': 90,  # Vertical torso
             },
             'lunge': {
-                'sword_arm_angle': 180.0,
-                'front_knee_angle': 90.0,
-                'back_knee_angle': 160.0,
-                'torso_angle': 85.0,
-                'stance_width': 1.5  # Normalized
+                'sword_arm_angle': 180,  # Fully extended arm
+                'front_knee_angle': 90,  # Right angle at front knee
+                'back_knee_angle': 170,  # Nearly straight back leg
+                'torso_angle': 85,  # Slightly forward lean
             }
         }
-        logger.info("Pose estimator initialized with motion tracking")
 
     def _convert_normalized_to_pixel(self, x_norm: float, y_norm: float, orig_width: int, orig_height: int) -> Tuple[int, int]:
         """
@@ -349,133 +323,150 @@ class PoseEstimator:
             logger.error(f"Error calculating joint angles: {str(e)}")
             return JointAngles()
 
-    def _get_keypoints(self, frame: np.ndarray) -> List[Optional[List[float]]]:
+    def _get_keypoints(self, frame: np.ndarray) -> List[List[List[Optional[float]]]]:
         """
-        Get keypoints from frame using MoveNet Thunder with correct preprocessing.
-        Note: The Thunder model expects an input tensor of type int32.
+        Get keypoints from frame using MoveNet Thunder.
+        Returns a list of keypoints lists (one per detected person).
         """
         try:
-            # Instead of converting to float32 and normalizing, use the raw image.
-            # The frame is expected to be in RGB and of type uint8.
-            img = tf.expand_dims(frame, axis=0)
-            img = tf.image.resize_with_pad(img, 
-                target_height=self.input_size,
-                target_width=self.input_size
-            )
-            img = tf.cast(img, dtype=tf.int32)
-
-            # Forward pass
-            outputs = self.movenet(**{self.input_tensor_name: img})
-            keypoints = outputs['output_0'].numpy()
-            keypoints = np.squeeze(keypoints)
-
-            # Scale up to the original frame size
             orig_height, orig_width = frame.shape[:2]
-            processed_keypoints = []
-
-            for (y_norm, x_norm, conf) in keypoints:
-                if conf > self.confidence_threshold:
-                    # Convert to pixel coordinates
-                    x_px, y_px = self._convert_normalized_to_pixel(
-                        x_norm, y_norm, orig_width, orig_height
-                    )
-                    processed_keypoints.append([x_px, y_px, conf])
-                else:
-                    processed_keypoints.append(None)
-
-            return processed_keypoints
-
-        except Exception as e:
-            logger.error(f"Error in pose estimation: {str(e)}")
-            return [None] * 17
-
-    def estimate_pose(self, frame: np.ndarray) -> Tuple[List[Optional[List[float]]], JointAngles]:
-        """
-        Estimate pose in a frame and return keypoints with joint angles.
-        """
-        try:
-            # Convert BGR → RGB
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             
-            # Get keypoints using the fixed function
-            keypoints = self._get_keypoints(frame_rgb)
+            # We'll detect multiple people by running inference on cropped regions
+            all_keypoints = []
+            
+            # Define regions to check for different fencers (left half and right half of frame)
+            regions = [
+                (0, 0, orig_width//2, orig_height),  # Left half
+                (orig_width//2, 0, orig_width, orig_height)  # Right half
+            ]
+            
+            for x1, y1, x2, y2 in regions:
+                # Crop region
+                region = frame[y1:y2, x1:x2]
+                if region.size == 0:
+                    continue
+                
+                # Resize and pad the image to keep the aspect ratio and fill to input_size
+                img = tf.expand_dims(region, axis=0)
+                img = tf.image.resize_with_pad(img, target_height=self.input_size, target_width=self.input_size)
+                img = tf.cast(img, dtype=tf.int32)
 
-            # Compute angles
-            angles = self._calculate_joint_angles(keypoints)
-            return keypoints, angles
+                # Run model inference
+                outputs = self.movenet(input=img)
+                keypoints = outputs['output_0'].numpy().reshape((17, 3))  # [y, x, confidence]
 
+                # Calculate padding to maintain aspect ratio
+                target = self.input_size
+                scale = min(target / (y2-y1), target / (x2-x1))
+                scaled_height = int((y2-y1) * scale)
+                scaled_width = int((x2-x1) * scale)
+                pad_height = target - scaled_height
+                pad_width = target - scaled_width
+                pad_top = pad_height // 2
+                pad_left = pad_width // 2
+                
+                # Process keypoints
+                person_keypoints = []
+                valid_keypoints = False
+                
+                for kp_idx in range(len(keypoints)):
+                    y_norm, x_norm, conf = keypoints[kp_idx]
+                    
+                    if conf > self.confidence_threshold:
+                        # Convert normalized coordinates back to original image space
+                        x_padded = x_norm * target
+                        y_padded = y_norm * target
+                        
+                        # Remove padding
+                        x_scaled = x_padded - pad_left
+                        y_scaled = y_padded - pad_top
+                        
+                        # Scale back to region dimensions
+                        x_region = x_scaled / scale
+                        y_region = y_scaled / scale
+                        
+                        # Convert back to full frame coordinates
+                        x_orig = x_region + x1
+                        y_orig = y_region + y1
+                        
+                        # Clip to image boundaries
+                        x_orig = np.clip(x_orig, 0, orig_width - 1)
+                        y_orig = np.clip(y_orig, 0, orig_height - 1)
+                        
+                        person_keypoints.append([int(x_orig), int(y_orig), conf])
+                        valid_keypoints = True
+                    else:
+                        person_keypoints.append(None)
+                
+                # Only add person if they have valid keypoints
+                if valid_keypoints:
+                    all_keypoints.append(person_keypoints)
+            
+            return all_keypoints if all_keypoints else [[None]*17]
+            
         except Exception as e:
             logger.error(f"Error in pose estimation: {str(e)}")
-            return [None] * 17, JointAngles()
+            return [[None]*17]
 
-    def draw_pose(self, frame: np.ndarray, keypoints: List[Optional[List[float]]], angles: JointAngles) -> np.ndarray:
-        """Draw pose keypoints and angles on the frame exactly matching reference implementation."""
-        try:
-            KEYPOINT_EDGE_INDS_TO_COLOR = {
-                (0, 1): (255, 0, 255),  # magenta
-                (0, 2): (0, 255, 255),  # cyan
-                (1, 3): (255, 0, 255),
-                (2, 4): (0, 255, 255),
-                (0, 5): (255, 0, 255),
-                (0, 6): (0, 255, 255),
-                (5, 7): (255, 0, 255),
-                (7, 9): (255, 0, 255),
-                (6, 8): (0, 255, 255),
-                (8, 10): (0, 255, 255),
-                (5, 6): (255, 255, 0),
-                (5, 11): (255, 0, 255),
-                (6, 12): (0, 255, 255),
-                (11, 12): (255, 255, 0),
-                (11, 13): (255, 0, 255),
-                (13, 15): (255, 0, 255),
-                (12, 14): (0, 255, 255),
-                (14, 16): (0, 255, 255)
-            }
+    def estimate_pose(self, frame: np.ndarray) -> Tuple[List[List[List[Optional[float]]]], List[JointAngles]]:
+        """Estimate poses for multiple people in a frame."""
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        keypoints_list = self._get_keypoints(frame_rgb)
+        angles_list = []
+        for keypoints in keypoints_list:
+            angles = self._calculate_joint_angles(keypoints)
+            angles_list.append(angles)
+        return keypoints_list, angles_list
 
-            annotated_frame = frame.copy()
+    def draw_pose(self, frame: np.ndarray, keypoints_list: List[List[List[Optional[float]]]], angles_list: List[JointAngles]) -> np.ndarray:
+        """Draw poses for multiple people with different colors."""
+        annotated_frame = frame.copy()
+        colors = [(0,255,0), (0,0,255), (255,0,0), (255,255,0)]  # Different colors for different people
+        
+        KEYPOINT_EDGE_INDS_TO_COLOR = {
+            (0, 1): (255, 0, 255),
+            (0, 2): (0, 255, 255),
+            (1, 3): (255, 0, 255),
+            (2, 4): (0, 255, 255),
+            (0, 5): (255, 0, 255),
+            (0, 6): (0, 255, 255),
+            (5, 7): (255, 0, 255),
+            (7, 9): (255, 0, 255),
+            (6, 8): (0, 255, 255),
+            (8, 10): (0, 255, 255),
+            (5, 6): (255, 255, 0),
+            (5, 11): (255, 0, 255),
+            (6, 12): (0, 255, 255),
+            (11, 12): (255, 255, 0),
+            (11, 13): (255, 0, 255),
+            (13, 15): (255, 0, 255),
+            (12, 14): (0, 255, 255),
+            (14, 16): (0, 255, 255)
+        }
 
-            # Draw edges
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        thickness = 2
+
+        def put_text(img, text, pos, color):
+            cv2.putText(img, text, pos, font, 0.6, (0,0,0), thickness+1)
+            cv2.putText(img, text, pos, font, 0.6, color, thickness)
+
+        for idx, keypoints in enumerate(keypoints_list):
+            color = colors[idx % len(colors)]
+            # Draw edges for this person
             for (v1, v2), edge_color in KEYPOINT_EDGE_INDS_TO_COLOR.items():
                 if keypoints[v1] is not None and keypoints[v2] is not None:
-                    if (keypoints[v1][2] > self.confidence_threshold and
-                        keypoints[v2][2] > self.confidence_threshold):
+                    if keypoints[v1][2] > self.confidence_threshold and keypoints[v2][2] > self.confidence_threshold:
                         pt1 = (int(keypoints[v1][0]), int(keypoints[v1][1]))
                         pt2 = (int(keypoints[v2][0]), int(keypoints[v2][1]))
-                        cv2.line(annotated_frame, pt1, pt2, edge_color, 2)
-
+                        cv2.line(annotated_frame, pt1, pt2, color, 2)
             # Draw keypoints
             for kp in keypoints:
                 if kp is not None and kp[2] > self.confidence_threshold:
-                    x, y = int(kp[0]), int(kp[1])
-                    cv2.circle(annotated_frame, (x, y), 3, (0, 255, 0), -1)
-
-            # Draw angles
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.6
-            thickness = 2
-
-            def put_outlined_text(img, text, pos):
-                cv2.putText(img, text, pos, font, font_scale, (0, 0, 0), thickness + 1)
-                cv2.putText(img, text, pos, font, font_scale, (255, 255, 255), thickness)
-
-            # Angle annotations near relevant joints
-            if angles.sword_arm_angle is not None and keypoints[8] is not None:
+                    cv2.circle(annotated_frame, (int(kp[0]), int(kp[1])), 3, color, -1)
+            # Annotate one angle for each person (e.g., sword arm)
+            if angles_list[idx].sword_arm_angle is not None and keypoints[8] is not None:
                 x, y = int(keypoints[8][0]), int(keypoints[8][1])
-                txt = f"{angles.sword_arm_angle:.1f}°"
-                put_outlined_text(annotated_frame, txt, (x + 10, y))
+                put_text(annotated_frame, f"{angles_list[idx].sword_arm_angle:.1f}°", (x+10, y), color)
 
-            if angles.front_knee_angle is not None and keypoints[14] is not None:
-                x, y = int(keypoints[14][0]), int(keypoints[14][1])
-                txt = f"{angles.front_knee_angle:.1f}°"
-                put_outlined_text(annotated_frame, txt, (x + 10, y))
-
-            if angles.back_knee_angle is not None and keypoints[13] is not None:
-                x, y = int(keypoints[13][0]), int(keypoints[13][1])
-                txt = f"{angles.back_knee_angle:.1f}°"
-                put_outlined_text(annotated_frame, txt, (x - 60, y))
-
-            return annotated_frame
-
-        except Exception as e:
-            logger.error(f"Error drawing pose: {str(e)}")
-            return frame
+        return annotated_frame

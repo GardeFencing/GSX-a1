@@ -1,0 +1,3 @@
+Module: https://tfhub.dev/google/movenet/multipose/lightning/1
+Download Time: 2025-02-11 13:45:15.737311
+Downloader Hostname: campus-110-094.ucdavis.edu (PID:20736)
