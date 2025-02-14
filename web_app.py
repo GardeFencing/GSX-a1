@@ -206,8 +206,22 @@ def upload_video():
             
             logger.info(f"Processing video with {total_frames} total frames, sampling every {sample_rate} frames")
             
-            # Downscale frames for faster processing - using 448x448 as recommended for CLIP
-            target_size = (448, 448)  # Match CLIP model's expected size
+            # Maintain aspect ratio while resizing frames - target a wider view
+            def resize_maintaining_aspect_ratio(frame, max_width=800, max_height=600):
+                height, width = frame.shape[:2]
+                
+                # Calculate scaling factor to maintain aspect ratio
+                scale_width = max_width / width
+                scale_height = max_height / height
+                scale = min(scale_width, scale_height)
+                
+                # Calculate new dimensions
+                new_width = int(width * scale)
+                new_height = int(height * scale)
+                
+                # Resize frame
+                resized = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
+                return resized
             
             frame_count = 0
             frames = []
@@ -223,36 +237,37 @@ def upload_video():
                     break
                     
                 if frame_count % sample_rate == 0:
-                    # Resize frame
-                    frame = cv2.resize(frame, target_size)
-                    current_batch.append((frame, frame_count))
+                    # Resize frame maintaining aspect ratio - store the properly sized frame
+                    frame = resize_maintaining_aspect_ratio(frame)
                     
-                    # Process batch when full
-                    if len(current_batch) >= batch_size:
-                        for batch_frame, batch_count in current_batch:
-                            frames.append(batch_frame)
-                            caption = video_processor.process_frame(batch_frame, batch_count, rag_system, frame_storage)
-                            frame_captions.append(caption)
-                        current_batch = []
-                        
-                        # Break if we have enough frames
-                        if len(frames) >= target_frames:
-                            break
+                    # Save frame to storage and get Frame object
+                    frame_obj = frame_storage.save_frame(frame, frame_count, time.time())
+                    frames.append(frame)  # Store the display frame
                     
-                frame_count += 1
-                
-            # Process remaining frames in the last batch
-            if current_batch and len(frames) < target_frames:
-                for batch_frame, batch_count in current_batch:
-                    frames.append(batch_frame)
-                    caption = video_processor.process_frame(batch_frame, batch_count, rag_system, frame_storage)
+                    # Create a copy for model processing that needs square input
+                    model_frame = cv2.resize(frame, (448, 448), interpolation=cv2.INTER_AREA)
+                    
+                    # Generate caption using the model frame
+                    analysis = rag_system.analyze_frame(str(frame_obj.path))
+                    caption = analysis.get('description', 'No caption available')
                     frame_captions.append(caption)
                     
+                    logger.info(f"Processed frame {frame_count} with caption: {caption}")
+                    
+                    # Break if we have enough frames
+                    if len(frames) >= target_frames:
+                        break
+                    
+                frame_count += 1
+
             cap.release()
             
             # Store processed frames and captions
             video_processor.frames = frames
             video_processor.frame_captions = frame_captions
+            
+            # Store frame objects in frame_storage
+            frame_storage.store_frames([frame_storage.get_frame(i) for i in range(len(frames))])
             
             logger.info(f"Successfully processed {len(frames)} frames with {len(frame_captions)} captions")
             
@@ -274,30 +289,102 @@ def upload_video():
 def chat():
     global video_processor, rag_system, frame_storage
     try:
-        if not video_processor:
-            return jsonify({'error': 'Please upload a video first'}), 400
+        if video_processor is None or len(getattr(video_processor, 'frames', [])) == 0:
+            return jsonify({'response': "Please upload a video first. I need to analyze the fencing techniques before I can answer your questions."}), 400
             
         data = request.get_json()
         if not data or 'query' not in data:
             return jsonify({'error': 'No query provided'}), 400
             
         query = data['query']
-        current_frame = data.get('current_frame', 0)
+        current_frame_idx = data.get('current_frame', 0)
         
-        logger.info(f"Processing chat query: {query} for frame {current_frame}")
+        logger.info(f"Processing chat query: {query} for frame {current_frame_idx}")
         
         try:
-            # Get response from RAG system
-            response = rag_system.chat(query, frame_index=current_frame)
-            logger.info(f"Generated response: {response}")
+            # If asking about the whole video
+            if "video" in query.lower() or "happening" in query.lower():
+                # Get all frames and their captions
+                frames = video_processor.frames
+                captions = video_processor.frame_captions
+                
+                if not frames or not captions:
+                    return jsonify({'response': "I haven't analyzed any frames from this video yet."}), 400
+                
+                # Create a comprehensive prompt for video analysis
+                prompt = "<image>\nAs a fencing expert, analyze this sequence of frames focusing on:\n"
+                prompt += "1. Technical execution and form\n"
+                prompt += "2. Movement progression and timing\n"
+                prompt += "3. Tactical implications\n\n"
+                prompt += f"User's question: {query}"
+                
+                # Analyze current frame for detailed context
+                if 0 <= current_frame_idx < len(frames):
+                    frame = frames[current_frame_idx]
+                    # Create model-ready frame
+                    model_frame = cv2.resize(frame, (448, 448), interpolation=cv2.INTER_AREA)
+                    # Save temporary frame
+                    temp_frame_path = os.path.join(frame_storage.session_dir, f"temp_analysis_{current_frame_idx}.jpg")
+                    cv2.imwrite(temp_frame_path, model_frame)
+                    
+                    # Get detailed analysis
+                    analysis = rag_system.analyze_frame(
+                        frame_path=temp_frame_path,
+                        prompt=prompt
+                    )
+                    
+                    # Format comprehensive response
+                    response = "Based on my analysis of the fencing sequence:\n\n"
+                    
+                    # Add frame-by-frame progression
+                    response += "Movement Progression:\n"
+                    for i, caption in enumerate(captions):
+                        response += f"Frame {i}: {caption}\n"
+                    
+                    # Add detailed current frame analysis
+                    if isinstance(analysis, dict) and 'description' in analysis:
+                        response += f"\nDetailed Analysis (Frame {current_frame_idx}):\n"
+                        response += analysis['description']
+                    
+                    # Clean up temporary file
+                    if os.path.exists(temp_frame_path):
+                        os.remove(temp_frame_path)
+                    
+                    return jsonify({'response': response})
+                
+            # For specific frame analysis
+            elif 0 <= current_frame_idx < len(video_processor.frames):
+                frame = video_processor.frames[current_frame_idx]
+                # Create model-ready frame
+                model_frame = cv2.resize(frame, (448, 448), interpolation=cv2.INTER_AREA)
+                # Save temporary frame
+                temp_frame_path = os.path.join(frame_storage.session_dir, f"temp_analysis_{current_frame_idx}.jpg")
+                cv2.imwrite(temp_frame_path, model_frame)
+                
+                # Create detailed prompt for specific analysis
+                prompt = f"<image>\nAs a fencing expert, analyze this frame focusing on:\n"
+                prompt += "1. Technical execution and form\n"
+                prompt += "2. Position and footwork\n"
+                prompt += "3. Tactical implications\n\n"
+                prompt += f"User's question: {query}"
+                
+                # Get detailed analysis
+                analysis = rag_system.analyze_frame(
+                    frame_path=temp_frame_path,
+                    prompt=prompt
+                )
+                
+                # Clean up temporary file
+                if os.path.exists(temp_frame_path):
+                    os.remove(temp_frame_path)
+                
+                if isinstance(analysis, dict) and 'description' in analysis:
+                    return jsonify({'response': analysis['description']})
             
-            if isinstance(response, str):
-                return jsonify({'response': response})
-            else:
-                return jsonify({'error': 'Invalid response format'}), 500
+            return jsonify({'error': 'Could not analyze the frame(s)'}), 400
                 
         except Exception as e:
-            logger.error(f"Error in chat processing: {str(e)}")
+            logger.error(f"Error in chat processing: {str(e)}", exc_info=True)
             return jsonify({'error': f'Error processing chat: {str(e)}'}), 500
             
     except Exception as e:
