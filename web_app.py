@@ -253,9 +253,15 @@ def upload_video():
         if video_file.filename == '':
             return jsonify({'error': 'No selected file'}), 400
             
-        # Save the uploaded file
-        video_path = os.path.join(app.config['UPLOAD_FOLDER'], video_file.filename)
+        # Save the uploaded file with absolute path
+        upload_folder = os.path.abspath(app.config['UPLOAD_FOLDER'])
+        if not os.path.exists(upload_folder):
+            os.makedirs(upload_folder)
+            
+        video_path = os.path.join(upload_folder, video_file.filename)
         video_file.save(video_path)
+        
+        logger.info(f"Saved video file to: {video_path}")
         
         try:
             # Initialize video processing
