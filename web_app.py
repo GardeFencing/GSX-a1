@@ -25,7 +25,7 @@ import asyncio
 # Import ML models and local RAG system
 from transformers import CLIPProcessor, CLIPModel
 from sentence_transformers import SentenceTransformer
-from pose_estimator import PoseEstimator, JointAngles
+# from pose_estimator import PoseEstimator, JointAngles  # Temporarily disabled
 from GardeRAG.model import GardeRAG  # Import our local RAG system
 from GardeRAG.frame import Frame, FrameStorage  # Import Frame and FrameStorage classes
 
@@ -55,163 +55,82 @@ frame_storage = FrameStorage()
 rag_system = GardeRAG()
 
 # ------------------------------------------------------------------------------
-# BIOMECHANICAL ANALYSIS
+# BIOMECHANICAL ANALYSIS - Temporarily disabled
 # ------------------------------------------------------------------------------
 
-@dataclass
-class BiomechanicalMetrics:
-    """Store biomechanical analysis results"""
-    power_generation: float = 0.0
-    balance_control: float = 0.0
-    movement_efficiency: float = 0.0
-    coordination: float = 0.0
-    technical_mastery: float = 0.0
+# @dataclass
+# class BiomechanicalMetrics:
+#     """Store biomechanical analysis results"""
+#     power_generation: float = 0.0
+#     balance_control: float = 0.0
+#     movement_efficiency: float = 0.0
+#     coordination: float = 0.0
+#     technical_mastery: float = 0.0
 
-class BiomechanicalAnalyzer:
-    """Analyze biomechanical aspects of fencing movements"""
-    def analyze_movement(self, frame_data: Dict) -> BiomechanicalMetrics:
-        metrics = BiomechanicalMetrics()
-        
-        # Extract angles
-        angles = frame_data.get('angles', {})
-        sword_arm = angles.get('sword_arm', 0)
-        front_knee = angles.get('front_knee', 0)
-        back_knee = angles.get('back_knee', 0)
-        torso = angles.get('torso', 0)
-        
-        # Calculate metrics (simplified example)
-        metrics.power_generation = self._calculate_power(sword_arm, front_knee)
-        metrics.balance_control = self._calculate_balance(front_knee, back_knee, torso)
-        metrics.movement_efficiency = self._calculate_efficiency(sword_arm, front_knee, back_knee)
-        metrics.coordination = self._calculate_coordination(sword_arm, front_knee)
-        metrics.technical_mastery = self._calculate_mastery(metrics)
-        
-        return metrics
-    
-    def _calculate_power(self, sword_arm: float, front_knee: float) -> float:
-        # Simplified power calculation
-        return min(1.0, max(0.0, (sword_arm / 180.0 + front_knee / 90.0) / 2))
-    
-    def _calculate_balance(self, front_knee: float, back_knee: float, torso: float) -> float:
-        # Simplified balance calculation
-        knee_diff = abs(front_knee - back_knee) / 180.0
-        torso_vertical = abs(90 - torso) / 90.0
-        return min(1.0, max(0.0, 1.0 - (knee_diff + torso_vertical) / 2))
-    
-    def _calculate_efficiency(self, sword_arm: float, front_knee: float, back_knee: float) -> float:
-        # Simplified efficiency calculation
-        return min(1.0, max(0.0, (sword_arm / 180.0 + front_knee / 90.0 + back_knee / 180.0) / 3))
-    
-    def _calculate_coordination(self, sword_arm: float, front_knee: float) -> float:
-        # Simplified coordination calculation
-        timing_factor = abs(sword_arm - front_knee) / 180.0
-        return min(1.0, max(0.0, 1.0 - timing_factor))
-    
-    def _calculate_mastery(self, metrics: BiomechanicalMetrics) -> float:
-        # Overall technical mastery score
-        return min(1.0, max(0.0, (
-            metrics.power_generation +
-            metrics.balance_control +
-            metrics.movement_efficiency +
-            metrics.coordination
-        ) / 4))
+# class BiomechanicalAnalyzer:
+#     """Analyze biomechanical aspects of fencing movements"""
+#     def analyze_movement(self, frame_data: Dict) -> BiomechanicalMetrics:
+#         metrics = BiomechanicalMetrics()
+#         return metrics
 
-class MovementAnalyzer:
-    """Analyze fencing movement sequences"""
-    def analyze_sequence(self, frame_window: List[Dict]) -> Dict[str, Any]:
-        if not frame_window:
-            return {
-                "sequence": "unknown",
-                "phase": "unknown",
-                "confidence": 0.0,
-                "temporal_context": "No movement detected"
-            }
-        
-        # Analyze angle changes
-        angle_changes = self._calculate_angle_changes(frame_window)
-        
-        # Determine sequence type and phase
-        sequence_type = self._determine_sequence_type(angle_changes)
-        phase = self._determine_phase(angle_changes)
-        confidence = self._calculate_confidence(angle_changes)
-        
-        # Generate temporal context
-        temporal_context = self._generate_temporal_context(sequence_type, phase, angle_changes)
-        
-        return {
-            "sequence": sequence_type,
-            "phase": phase,
-            "confidence": confidence,
-            "temporal_context": temporal_context
-        }
-    
-    def _calculate_angle_changes(self, frame_window: List[Dict]) -> Dict[str, List[float]]:
-        changes = {
-            'sword_arm': [],
-            'front_knee': [],
-            'back_knee': [],
-            'torso': []
-        }
-        
-        for i in range(1, len(frame_window)):
-            prev = frame_window[i-1]['angles']
-            curr = frame_window[i]['angles']
-            
-            for angle in changes.keys():
-                if angle in prev and angle in curr:
-                    changes[angle].append(curr[angle] - prev[angle])
-                else:
-                    changes[angle].append(0.0)
-        
-        return changes
-    
-    def _determine_sequence_type(self, angle_changes: Dict[str, List[float]]) -> str:
-        # Analyze patterns in angle changes to determine sequence type
-        sword_arm_change = sum(angle_changes['sword_arm'])
-        front_knee_change = sum(angle_changes['front_knee'])
-        
-        if abs(sword_arm_change) > 30 and front_knee_change < -20:
-            return "lunge"
-        elif abs(sword_arm_change) > 20 and abs(front_knee_change) < 10:
-            return "cut"
-        elif abs(sword_arm_change) < 10 and abs(front_knee_change) < 10:
-            return "preparation"
-        else:
-            return "unknown"
-    
-    def _determine_phase(self, angle_changes: Dict[str, List[float]]) -> str:
-        # Determine current phase of movement
-        recent_changes = {k: v[-3:] if len(v) >= 3 else v for k, v in angle_changes.items()}
-        
-        sword_arm_velocity = sum(recent_changes['sword_arm']) / len(recent_changes['sword_arm'])
-        front_knee_velocity = sum(recent_changes['front_knee']) / len(recent_changes['front_knee'])
-        
-        if abs(sword_arm_velocity) < 5 and abs(front_knee_velocity) < 5:
-            return "preparation"
-        elif sword_arm_velocity > 10 or front_knee_velocity < -10:
-            return "execution"
-        else:
-            return "recovery"
-    
-    def _calculate_confidence(self, angle_changes: Dict[str, List[float]]) -> float:
-        # Calculate confidence based on consistency and magnitude of changes
-        total_change = sum(abs(sum(changes)) for changes in angle_changes.values())
-        consistency = 1.0 - (
-            sum(abs(max(changes, default=0) - min(changes, default=0)) 
-                for changes in angle_changes.values()) / (total_change + 1e-6)
-        )
-        return min(1.0, max(0.0, consistency))
-    
-    def _generate_temporal_context(self, sequence_type: str, phase: str, 
-                                 angle_changes: Dict[str, List[float]]) -> str:
-        # Generate natural language description of movement context
-        if sequence_type == "unknown":
-            return "Movement not recognized"
-        
-        magnitude = sum(abs(sum(changes)) for changes in angle_changes.values())
-        speed = "quickly" if magnitude > 50 else "steadily" if magnitude > 20 else "slowly"
-        
-        return f"Performing a {sequence_type} {speed}, currently in {phase} phase"
+# class MovementAnalyzer:
+#     """Analyze movement sequences in video frames"""
+#     def analyze_sequence(self, angle_changes: Dict[str, List[float]]) -> Dict[str, Any]:
+#         sequence_type = self._identify_sequence(angle_changes)
+#         phase = self._identify_phase(angle_changes)
+#         confidence = self._calculate_confidence(angle_changes)
+#         context = self._generate_temporal_context(sequence_type, phase, angle_changes)
+#         
+#         return {
+#             'sequence_type': sequence_type,
+#             'phase': phase,
+#             'confidence': confidence,
+#             'context': context
+#         }
+#     
+#     def _identify_sequence(self, angle_changes: Dict[str, List[float]]) -> str:
+#         # Simplified sequence identification
+#         total_change = sum(abs(sum(changes)) for changes in angle_changes.values())
+#         if total_change > 100:
+#             return "lunge"
+#         elif total_change > 50:
+#             return "advance"
+#         else:
+#             return "unknown"
+#     
+#     def _identify_phase(self, angle_changes: Dict[str, List[float]]) -> str:
+#         # Simplified phase identification
+#         recent_changes = [changes[-3:] for changes in angle_changes.values() if len(changes) >= 3]
+#         if not recent_changes:
+#             return "unknown"
+#         
+#         avg_recent_change = sum(sum(changes) for changes in recent_changes) / len(recent_changes)
+#         if avg_recent_change > 5:
+#             return "preparation"
+#         elif avg_recent_change < -5:
+#             return "recovery"
+#         else:
+#             return "execution"
+#     
+#     def _calculate_confidence(self, angle_changes: Dict[str, List[float]]) -> float:
+#         # Calculate confidence based on consistency and magnitude of changes
+#         total_change = sum(abs(sum(changes)) for changes in angle_changes.values())
+#         consistency = 1.0 - (
+#             sum(abs(max(changes, default=0) - min(changes, default=0)) 
+#                 for changes in angle_changes.values()) / (total_change + 1e-6)
+#         )
+#         return min(1.0, max(0.0, consistency))
+#     
+#     def _generate_temporal_context(self, sequence_type: str, phase: str, 
+#                                  angle_changes: Dict[str, List[float]]) -> str:
+#         # Generate natural language description of movement context
+#         if sequence_type == "unknown":
+#             return "Movement not recognized"
+#         
+#         magnitude = sum(abs(sum(changes)) for changes in angle_changes.values())
+#         speed = "quickly" if magnitude > 50 else "steadily" if magnitude > 20 else "slowly"
+#         
+#         return f"Performing a {sequence_type} {speed}, currently in {phase} phase"
 
 class VideoProcessor:
     """Process video files and extract frames"""

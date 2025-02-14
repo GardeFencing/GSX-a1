@@ -1,16 +1,16 @@
 # VidCLIPChatbot
 
-A video analysis and chat system that combines pose estimation, biomechanical analysis, and RAG (Retrieval-Augmented Generation) for fencing technique analysis.
+A video analysis and chat system for fencing technique analysis using MiniCPM-V and llama.cpp.
 
 ## Prerequisites
 
-- Python 3.10 (recommended)
+- Python 3.10 or higher
 - Git
 - macOS with Apple Silicon (M1/M2/M3) or Intel processor
 
 ## Installation
 
-1. Clone the repository:
+1. Clone the repository and enter the directory:
 ```bash
 git clone https://github.com/yourusername/VidCLIPChatbot.git
 cd VidCLIPChatbot
@@ -18,66 +18,65 @@ cd VidCLIPChatbot
 
 2. Create and activate a virtual environment:
 ```bash
-# Create virtual environment
-python3.10 -m venv venv_tf
-
-# Activate virtual environment
-source venv_tf/bin/activate
+python -m venv venv
+source venv/bin/activate
 ```
 
-3. Install dependencies:
+3. Install Python dependencies:
 ```bash
-# Upgrade pip
 pip install --upgrade pip
-
-# Install requirements
 pip install -r requirements.txt
 ```
 
-4. Install MMPT package:
+4. Download and set up the models:
 ```bash
-# First, ensure you're in the project root
-cd examples/MMPT
-
-# Clean any previous installations
-rm -rf build dist *.egg-info
-
-# Install in development mode
-pip install -e .
-
-# Verify installation
-python -c "from mmpt.processors.processor import MMPTProcessor; print('MMPT installed successfully')"
-
-# Return to project root
-cd ../..
+# This script will download the required model files
+python download_models.py
 ```
 
-5. Set up MoveNet Thunder model:
+## MiniCPM-V Integration
+
+This project leverages [MiniCPM-V](https://github.com/OpenBMB/MiniCPM-o/tree/main?tab=readme-ov-file#chat-with-video), a powerful multimodal model capable of analyzing video content with high precision. Our implementation uses the following optimized parameters for fencing analysis:
+
 ```bash
-# Run the setup script
-python setup_movenet_thunder.py
+./llama-minicpmv-cli -m models/ggml-model-Q2_K.gguf --mmproj models/mmproj-model-f16.gguf -c 2048 --temp 0.1 --top-p 0.9 --top-k 40 --repeat-penalty 1.1 --n-gpu-layers 1 --threads 8 --batch-size 512 --mlock
 ```
 
-## Environment Variables
-
-Create a `.env` file in the project root with the following variables:
-```
-PYTORCH_ENABLE_MPS_FALLBACK=1  # For macOS with Apple Silicon
-```
+Key features of our MiniCPM-V integration:
+- Optimized for Apple Silicon with Metal acceleration
+- Efficient frame analysis with 2048 context window
+- Low temperature (0.1) for precise, deterministic responses
+- Memory-efficient batch processing with mlock support
+- GPU acceleration with configurable layer count
 
 ## Project Structure
 
-- `web_app.py`: Main Flask application
-- `pose_estimator.py`: Pose estimation and biomechanical analysis
-- `GardeRAG/`: RAG system implementation
-  - `model.py`: Core RAG model
+- `web_app.py`: Main Flask application for video upload and analysis
+- `GardeRAG/`: Core analysis system
+  - `model.py`: MiniCPM-V integration and frame analysis
   - `frame.py`: Frame processing utilities
-  - `prompt.py`: Prompt templates
-- `examples/MMPT/`: Video feature extraction
-  - `mmpt/`: Core MMPT package
-    - `processors/`: Video processing modules
-    - `models/`: Model implementations
-    - `utils/`: Utility functions
+
+## Model Capabilities
+
+Our implementation of MiniCPM-V is specifically tuned for fencing analysis:
+
+1. **Frame Analysis**
+   - Detailed analysis of fencing techniques and positions
+   - Recognition of specific moves (e.g., lunges, parries, ripostes)
+   - Form and posture evaluation
+   - Technical precision assessment
+
+2. **Interactive Chat**
+   - Real-time Q&A about specific frames
+   - Technical explanations of observed techniques
+   - Coaching insights and recommendations
+   - Tactical analysis of movements
+
+3. **Video Processing**
+   - Intelligent frame selection for analysis
+   - Temporal context understanding
+   - Efficient batch processing of video segments
+   - High-quality frame extraction and storage
 
 ## Running the Application
 
@@ -91,31 +90,30 @@ python web_app.py
 http://localhost:5000
 ```
 
-## Hardware Recommendations
+3. Upload a fencing video to analyze techniques and positions.
 
-- For optimal performance:
+## Hardware Requirements
+
+- Recommended:
   - macOS with Apple Silicon (M1/M2/M3)
   - 16GB RAM or more
-  - 10GB free disk space
-
-- Minimum requirements:
-  - macOS (Intel/Apple Silicon)
-  - 8GB RAM
-  - 5GB free disk space
+  - 5GB free disk space for models and temporary files
 
 ## Troubleshooting
 
-1. If you encounter memory issues:
-   - Reduce batch size in video processing
-   - Close other memory-intensive applications
+1. If you encounter model loading issues:
+   - Verify models are downloaded correctly in `llama.cpp/models/`
+   - Check that both `ggml-model-Q2_K.gguf` and `mmproj-model-f16.gguf` exist
 
 2. For MPS (Metal Performance Shaders) issues on macOS:
-   - Ensure PYTORCH_ENABLE_MPS_FALLBACK=1 is set
-   - Try falling back to CPU if needed
+   - Ensure `PYTORCH_ENABLE_MPS_FALLBACK=1` is set in your environment
+   - Try running with CPU if GPU acceleration fails
 
-3. If MMPT import fails:
-   - Verify MMPT installation: `pip list | grep mmpt`
-   - Reinstall MMPT if needed: `cd examples/MMPT && pip install -e .`
+## Future Features
+
+- MoveNet integration for pose estimation (coming soon)
+- Biomechanical analysis of fencing movements
+- Advanced frame selection using pose data
 
 ## License
 
