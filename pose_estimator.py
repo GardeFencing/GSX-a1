@@ -57,16 +57,17 @@ class MotionSequence:
 
 class PoseEstimator:
     def __init__(self, sequence_length: int = 5):
-        """Initialize MoveNet pose estimator (SinglePoseLightning)"""
-        logger.info("Initializing MoveNet pose estimator (SinglePoseLightning)...")
+        """Initialize MoveNet pose estimator (SinglePoseThunder)"""
+        logger.info("Initializing MoveNet pose estimator (SinglePoseThunder)...")
         
         # Model parameters
-        self.input_size = 192  # MoveNet Lightning input size
+        self.input_size = 256  # MoveNet Thunder input size (changed from 192)
         self.confidence_threshold = 0.2
         
-        # Load MoveNet model
-        model = hub.load('https://tfhub.dev/google/movenet/singlepose/lightning/4')
-        self.movenet = model.signatures['serving_default']
+        # Load MoveNet Thunder
+        model_path = "https://tfhub.dev/google/movenet/singlepose/thunder/4"
+        self.model = hub.load(model_path)
+        self.movenet = self.model.signatures['serving_default']
         
         # Initialize motion tracking
         self.sequence_length = sequence_length
@@ -90,6 +91,36 @@ class PoseEstimator:
                 'torso_angle': 85.0,
                 'stance_width': 1.5  # Normalized
             }
+        }
+        
+        # Define the keypoint pairs for drawing
+        self.KEYPOINT_EDGES = {
+            (0, 1): 'm',    # nose to left_eye
+            (0, 2): 'm',    # nose to right_eye
+            (1, 3): 'm',    # left_eye to left_ear
+            (2, 4): 'm',    # right_eye to right_ear
+            (0, 5): 'm',    # nose to left_shoulder
+            (0, 6): 'm',    # nose to right_shoulder
+            (5, 6): 'y',    # left_shoulder to right_shoulder
+            (5, 7): 'y',    # left_shoulder to left_elbow
+            (7, 9): 'y',    # left_elbow to left_wrist
+            (6, 8): 'y',    # right_shoulder to right_elbow
+            (8, 10): 'y',   # right_elbow to right_wrist
+            (5, 11): 'g',   # left_shoulder to left_hip
+            (6, 12): 'g',   # right_shoulder to right_hip
+            (11, 12): 'g',  # left_hip to right_hip
+            (11, 13): 'r',  # left_hip to left_knee
+            (13, 15): 'r',  # left_knee to left_ankle
+            (12, 14): 'r',  # right_hip to right_knee
+            (14, 16): 'r'   # right_knee to right_ankle
+        }
+        
+        # Color mapping
+        self.COLOR_MAP = {
+            'm': (255, 0, 255),   # magenta
+            'y': (255, 255, 0),   # yellow
+            'g': (0, 255, 0),     # green
+            'r': (0, 0, 255)      # red
         }
         logger.info("Pose estimator initialized with motion tracking")
 
@@ -489,3 +520,160 @@ class PoseEstimator:
         except Exception as e:
             logger.error(f"Error calculating joint angles: {str(e)}")
             return JointAngles()
+
+    def _prepare_image(self, image: np.ndarray) -> tf.Tensor:
+        """Prepare image for model input."""
+        try:
+            # Convert to RGB if needed
+            if len(image.shape) == 3 and image.shape[2] == 3:
+                image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            else:
+                image_rgb = image
+            
+            # Convert to float32 in range [0, 1]
+            input_image = tf.convert_to_tensor(image_rgb)
+            input_image = tf.cast(input_image, tf.float32)
+            input_image = input_image / 255.0
+            
+            # Add batch dimension and resize
+            input_image = tf.expand_dims(input_image, axis=0)
+            input_image = tf.image.resize_with_pad(input_image, self.input_size, self.input_size)
+            
+            # Scale back to [0, 255] and convert to int32
+            input_image = tf.cast(input_image * 255.0, tf.int32)
+            
+            return input_image
+            
+        except Exception as e:
+            logger.error(f"Error preparing image: {str(e)}")
+            raise
+
+    def process_image(self, image: np.ndarray, 
+                     min_confidence: float = 0.3) -> Tuple[np.ndarray, Optional[JointAngles]]:
+        """Process image and return annotated image with pose and joint angles."""
+        try:
+            # Log image properties
+            logger.info(f"Processing image with shape: {image.shape}")
+            
+            # Prepare image
+            input_image = self._prepare_image(image)
+            logger.info(f"Prepared input image shape: {input_image.shape}, dtype: {input_image.dtype}")
+            
+            # Run inference - pass tensor directly without dictionary
+            outputs = self.movenet(input_image)
+            keypoints = outputs['output_0'].numpy().squeeze()
+            logger.info(f"Got keypoints with shape: {keypoints.shape}")
+            
+            # Create output image
+            output_image = image.copy()
+            height, width = image.shape[:2]
+            
+            # Convert normalized coordinates to pixel coordinates
+            keypoints_px = []
+            for kp in keypoints:
+                y, x, conf = kp
+                if conf > min_confidence:
+                    x_px = int(x * width)
+                    y_px = int(y * height)
+                    keypoints_px.append([x_px, y_px, conf])
+                else:
+                    keypoints_px.append(None)
+            
+            # Draw keypoints and connections
+            joint_angles = None
+            if any(kp is not None for kp in keypoints_px):
+                logger.info(f"Found keypoints above confidence threshold")
+                # Draw edges
+                for (start_idx, end_idx), color_code in self.KEYPOINT_EDGES.items():
+                    if (keypoints_px[start_idx] is not None and 
+                        keypoints_px[end_idx] is not None):
+                        try:
+                            start_point = keypoints_px[start_idx][:2]
+                            end_point = keypoints_px[end_idx][:2]
+                            cv2.line(output_image, 
+                                    (int(start_point[0]), int(start_point[1])),
+                                    (int(end_point[0]), int(end_point[1])),
+                                    self.COLOR_MAP[color_code], 2)
+                        except Exception as e:
+                            logger.error(f"Error drawing line for keypoints {start_idx}-{end_idx}: {str(e)}")
+            
+                # Calculate joint angles
+                try:
+                    joint_angles = self._calculate_joint_angles(keypoints_px)
+                    logger.info("Successfully calculated joint angles")
+                except Exception as e:
+                    logger.error(f"Error calculating joint angles: {str(e)}")
+                    joint_angles = JointAngles()
+            else:
+                logger.warning("No keypoints found above confidence threshold")
+            
+            return output_image, joint_angles
+            
+        except Exception as e:
+            logger.error(f"Error in pose estimation: {str(e)}", exc_info=True)
+            return image.copy(), JointAngles()  # Return original image and empty angles on error
+    
+    def process_video(self, video_path: str, output_path: str = None,
+                     min_confidence: float = 0.3) -> List[JointAngles]:
+        """Process video and return list of joint angles for each frame."""
+        try:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                raise ValueError(f"Could not open video file: {video_path}")
+            
+            # Get video properties
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = int(cap.get(cv2.CAP_PROP_FPS))
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            logger.info(f"Video properties - Width: {width}, Height: {height}, FPS: {fps}, Total frames: {total_frames}")
+            
+            # Setup video writer if output path is provided
+            writer = None
+            if output_path:
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+                logger.info(f"Video writer initialized for output: {output_path}")
+            
+            joint_angles_list = []
+            frame_count = 0
+            
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    logger.info(f"Finished reading video after {frame_count} frames")
+                    break
+                
+                frame_count += 1
+                if frame_count % 10 == 0:  # Log progress every 10 frames
+                    logger.info(f"Processing frame {frame_count}/{total_frames}")
+                
+                try:
+                    # Process frame
+                    annotated_frame, joint_angles = self.process_image(frame, min_confidence)
+                    
+                    if joint_angles:
+                        joint_angles_list.append(joint_angles)
+                    
+                    # Write frame if output path is provided
+                    if writer:
+                        writer.write(annotated_frame)
+                        
+                except Exception as e:
+                    logger.error(f"Error processing frame {frame_count}: {str(e)}", exc_info=True)
+                    continue
+                
+            logger.info(f"Processed {frame_count} frames, got {len(joint_angles_list)} sets of joint angles")
+            
+        except Exception as e:
+            logger.error(f"Error in video processing: {str(e)}", exc_info=True)
+            raise
+            
+        finally:
+            if cap is not None:
+                cap.release()
+            if writer is not None:
+                writer.release()
+        
+        return joint_angles_list

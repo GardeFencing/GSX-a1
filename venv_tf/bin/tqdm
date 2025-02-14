@@ -1,4 +1,4 @@
-#!/Users/rdas/Projects/VidCLIPChatbot/venv_tf/bin/python3.9
+#!/Users/rdas/Projects/VidCLIPChatbot/venv_tf/bin/python3.10
 # -*- coding: utf-8 -*-
 import re
 import sys

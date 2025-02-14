@@ -1,12 +1,18 @@
-from flask import Flask, request, jsonify, render_template, send_file
 import os
+import sys
+
+# Set MPS configuration before any imports
+if sys.platform == 'darwin':
+    os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+    os.environ['PYTORCH_MPS_HIGH_WATERMARK_RATIO'] = '0.7'
+
+from flask import Flask, request, jsonify, render_template, send_file
 import logging
 import cv2
 import base64
 import numpy as np
 from PIL import Image
 import io
-import requests
 import torch
 import torch.nn.functional as F
 from dataclasses import dataclass
@@ -15,16 +21,19 @@ from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 import time
 import asyncio
-import aiohttp
 
-# Import ML models
+# Import ML models and local RAG system
 from transformers import CLIPProcessor, CLIPModel
 from sentence_transformers import SentenceTransformer
 from pose_estimator import PoseEstimator, JointAngles
+from GardeRAG.model import GardeRAG  # Import our local RAG system
+from GardeRAG.frame import Frame, FrameStorage  # Import Frame and FrameStorage classes
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
 video_processor = None  # Global VideoProcessor instance
+rag_system = None  # Global GardeRAG instance
+frame_storage = None  # Global FrameStorage instance
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -40,6 +49,11 @@ clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device
 clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 sent_transformer = SentenceTransformer("all-MiniLM-L6-v2", device=device)
 
+# Initialize GardeRAG and FrameStorage
+logger.info("Initializing GardeRAG system and FrameStorage...")
+frame_storage = FrameStorage()
+rag_system = GardeRAG()
+
 # ------------------------------------------------------------------------------
 # BIOMECHANICAL ANALYSIS
 # ------------------------------------------------------------------------------
@@ -54,475 +68,171 @@ class BiomechanicalMetrics:
     technical_mastery: float = 0.0
 
 class BiomechanicalAnalyzer:
-    """Advanced biomechanical analysis for fencing movements"""
-    def __init__(self):
-        self.kinetic_chains = {
-            'power_generation': ['back_leg', 'hip_rotation', 'torso', 'sword_arm'],
-            'balance_control': ['stance_width', 'hip_alignment', 'torso_angle'],
-            'movement_efficiency': ['joint_coordination', 'momentum_transfer']
-        }
-        
-    def analyze_movement(self, frame_data: Dict[str, Any]) -> BiomechanicalMetrics:
-        """Analyze movement biomechanics from frame data"""
+    """Analyze biomechanical aspects of fencing movements"""
+    def analyze_movement(self, frame_data: Dict) -> BiomechanicalMetrics:
         metrics = BiomechanicalMetrics()
         
-        # Analyze power generation through kinetic chain
-        if 'angles' in frame_data:
-            angles = frame_data['angles']
-            metrics.power_generation = self._analyze_power_chain(angles)
-            metrics.balance_control = self._analyze_balance(angles)
-            metrics.movement_efficiency = self._analyze_efficiency(angles)
-            metrics.coordination = self._analyze_coordination(angles)
-            
-            # Calculate overall technical mastery
-            metrics.technical_mastery = np.mean([
-                metrics.power_generation,
-                metrics.balance_control,
-                metrics.movement_efficiency,
-                metrics.coordination
-            ])
+        # Extract angles
+        angles = frame_data.get('angles', {})
+        sword_arm = angles.get('sword_arm', 0)
+        front_knee = angles.get('front_knee', 0)
+        back_knee = angles.get('back_knee', 0)
+        torso = angles.get('torso', 0)
+        
+        # Calculate metrics (simplified example)
+        metrics.power_generation = self._calculate_power(sword_arm, front_knee)
+        metrics.balance_control = self._calculate_balance(front_knee, back_knee, torso)
+        metrics.movement_efficiency = self._calculate_efficiency(sword_arm, front_knee, back_knee)
+        metrics.coordination = self._calculate_coordination(sword_arm, front_knee)
+        metrics.technical_mastery = self._calculate_mastery(metrics)
         
         return metrics
     
-    def _analyze_power_chain(self, angles: Dict[str, float]) -> float:
-        """Analyze power generation through kinetic chain"""
-        # Check proper sequence activation (proximal to distal)
-        power_scores = []
-        ideal_sequence = ['back_knee', 'front_knee', 'torso', 'sword_arm']
-        
-        for i, joint in enumerate(ideal_sequence[:-1]):
-            if joint in angles and ideal_sequence[i+1] in angles:
-                # Check if proximal joint moves before distal
-                score = 1.0 if angles[joint] > angles[ideal_sequence[i+1]] else 0.5
-                power_scores.append(score)
-        
-        return np.mean(power_scores) if power_scores else 0.0
+    def _calculate_power(self, sword_arm: float, front_knee: float) -> float:
+        # Simplified power calculation
+        return min(1.0, max(0.0, (sword_arm / 180.0 + front_knee / 90.0) / 2))
     
-    def _analyze_balance(self, angles: Dict[str, float]) -> float:
-        """Analyze balance control"""
-        balance_scores = []
-        
-        # Check torso alignment
-        if 'torso' in angles:
-            torso_score = 1.0 - min(1.0, abs(angles['torso'] - 90) / 45.0)
-            balance_scores.append(torso_score)
-        
-        # Check knee alignment
-        if 'front_knee' in angles and 'back_knee' in angles:
-            knee_diff = abs(angles['front_knee'] - angles['back_knee'])
-            knee_score = 1.0 - min(1.0, knee_diff / 45.0)
-            balance_scores.append(knee_score)
-        
-        return np.mean(balance_scores) if balance_scores else 0.0
+    def _calculate_balance(self, front_knee: float, back_knee: float, torso: float) -> float:
+        # Simplified balance calculation
+        knee_diff = abs(front_knee - back_knee) / 180.0
+        torso_vertical = abs(90 - torso) / 90.0
+        return min(1.0, max(0.0, 1.0 - (knee_diff + torso_vertical) / 2))
     
-    def _analyze_efficiency(self, angles: Dict[str, float]) -> float:
-        """Analyze movement efficiency"""
-        # Check for excessive joint angles
-        efficiency_scores = []
-        
-        if 'sword_arm' in angles:
-            # Penalize over-extension or under-extension
-            sword_efficiency = 1.0 - min(1.0, abs(angles['sword_arm'] - 180) / 90.0)
-            efficiency_scores.append(sword_efficiency)
-        
-        if 'front_knee' in angles:
-            # Optimal front knee angle around 90-100 degrees
-            knee_efficiency = 1.0 - min(1.0, abs(angles['front_knee'] - 95) / 45.0)
-            efficiency_scores.append(knee_efficiency)
-        
-        return np.mean(efficiency_scores) if efficiency_scores else 0.0
+    def _calculate_efficiency(self, sword_arm: float, front_knee: float, back_knee: float) -> float:
+        # Simplified efficiency calculation
+        return min(1.0, max(0.0, (sword_arm / 180.0 + front_knee / 90.0 + back_knee / 180.0) / 3))
     
-    def _analyze_coordination(self, angles: Dict[str, float]) -> float:
-        """Analyze inter-joint coordination"""
-        coordination_scores = []
-        
-        # Check sword arm and front knee coordination
-        if 'sword_arm' in angles and 'front_knee' in angles:
-            # Ideal relationship: as sword extends, knee bends
-            coord_score = 1.0 if (angles['sword_arm'] > 160 and angles['front_knee'] < 110) else 0.5
-            coordination_scores.append(coord_score)
-        
-        # Check torso and leg coordination
-        if 'torso' in angles and 'front_knee' in angles and 'back_knee' in angles:
-            torso_coord = 1.0 if (80 <= angles['torso'] <= 100) else 0.5
-            coordination_scores.append(torso_coord)
-        
-        return np.mean(coordination_scores) if coordination_scores else 0.0
-
-# ------------------------------------------------------------------------------
-# MOVEMENT SEQUENCE ANALYSIS
-# ------------------------------------------------------------------------------
+    def _calculate_coordination(self, sword_arm: float, front_knee: float) -> float:
+        # Simplified coordination calculation
+        timing_factor = abs(sword_arm - front_knee) / 180.0
+        return min(1.0, max(0.0, 1.0 - timing_factor))
+    
+    def _calculate_mastery(self, metrics: BiomechanicalMetrics) -> float:
+        # Overall technical mastery score
+        return min(1.0, max(0.0, (
+            metrics.power_generation +
+            metrics.balance_control +
+            metrics.movement_efficiency +
+            metrics.coordination
+        ) / 4))
 
 class MovementAnalyzer:
-    """Advanced movement sequence analysis"""
-    def __init__(self, memory_window: int = 5):
-        self.memory_window = memory_window
-        self.movement_history = []
-        self.phase_transitions = []
-        
-        # Define movement phases and their characteristics
-        self.movement_phases = {
-            'preparation': {
-                'sword_arm_range': (130, 150),
-                'front_knee_range': (140, 160),
-                'characteristics': ['stable_base', 'loaded_position']
-            },
-            'extension': {
-                'sword_arm_range': (170, 180),
-                'front_knee_range': (80, 100),
-                'characteristics': ['forward_drive', 'arm_extension']
-            },
-            'recovery': {
-                'sword_arm_range': (130, 150),
-                'front_knee_range': (140, 160),
-                'characteristics': ['weight_shift', 'reset_position']
-            }
-        }
-    
-    def analyze_sequence(self, frame_window: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Analyze movement sequence from frame window"""
+    """Analyze fencing movement sequences"""
+    def analyze_sequence(self, frame_window: List[Dict]) -> Dict[str, Any]:
         if not frame_window:
             return {
                 "sequence": "unknown",
                 "phase": "unknown",
                 "confidence": 0.0,
-                "temporal_context": "No movement data"
+                "temporal_context": "No movement detected"
             }
         
-        # Update movement history
-        self.movement_history = frame_window[-self.memory_window:]
+        # Analyze angle changes
+        angle_changes = self._calculate_angle_changes(frame_window)
         
-        # Detect current phase
-        current_phase = self._detect_movement_phase(frame_window[-1])
+        # Determine sequence type and phase
+        sequence_type = self._determine_sequence_type(angle_changes)
+        phase = self._determine_phase(angle_changes)
+        confidence = self._calculate_confidence(angle_changes)
         
-        # Analyze phase transition
-        if self.phase_transitions and current_phase != self.phase_transitions[-1]:
-            self.phase_transitions.append(current_phase)
-        elif not self.phase_transitions:
-            self.phase_transitions.append(current_phase)
-        
-        # Calculate confidence based on characteristic matches
-        confidence = self._calculate_phase_confidence(frame_window[-1], current_phase)
-        
-        # Determine sequence type
-        sequence_type = self._determine_sequence_type()
+        # Generate temporal context
+        temporal_context = self._generate_temporal_context(sequence_type, phase, angle_changes)
         
         return {
             "sequence": sequence_type,
-            "phase": current_phase,
+            "phase": phase,
             "confidence": confidence,
-            "temporal_context": self._get_temporal_context()
+            "temporal_context": temporal_context
         }
     
-    def _detect_movement_phase(self, frame_data: Dict[str, Any]) -> str:
-        """Detect current movement phase"""
-        if 'angles' not in frame_data:
-            return "unknown"
+    def _calculate_angle_changes(self, frame_window: List[Dict]) -> Dict[str, List[float]]:
+        changes = {
+            'sword_arm': [],
+            'front_knee': [],
+            'back_knee': [],
+            'torso': []
+        }
         
-        angles = frame_data['angles']
-        phase_scores = {}
-        
-        for phase, characteristics in self.movement_phases.items():
-            score = 0
-            total_checks = 0
+        for i in range(1, len(frame_window)):
+            prev = frame_window[i-1]['angles']
+            curr = frame_window[i]['angles']
             
-            # Check sword arm angle
-            if 'sword_arm' in angles:
-                min_angle, max_angle = characteristics['sword_arm_range']
-                if min_angle <= angles['sword_arm'] <= max_angle:
-                    score += 1
-                total_checks += 1
-            
-            # Check front knee angle
-            if 'front_knee' in angles:
-                min_angle, max_angle = characteristics['front_knee_range']
-                if min_angle <= angles['front_knee'] <= max_angle:
-                    score += 1
-                total_checks += 1
-            
-            phase_scores[phase] = score / total_checks if total_checks > 0 else 0
-        
-        # Return phase with highest score
-        return max(phase_scores.items(), key=lambda x: x[1])[0]
-    
-    def _calculate_phase_confidence(self, frame_data: Dict[str, Any], phase: str) -> float:
-        """Calculate confidence in phase detection"""
-        if phase == "unknown" or phase not in self.movement_phases:
-            return 0.0
-        
-        if 'angles' not in frame_data:
-            return 0.0
-        
-        angles = frame_data['angles']
-        characteristics = self.movement_phases[phase]
-        confidence_scores = []
-        
-        # Check angle ranges
-        for joint in ['sword_arm', 'front_knee']:
-            if joint in angles:
-                min_angle, max_angle = characteristics[f'{joint}_range']
-                angle = angles[joint]
-                # Calculate how close the angle is to the ideal range
-                if min_angle <= angle <= max_angle:
-                    confidence_scores.append(1.0)
+            for angle in changes.keys():
+                if angle in prev and angle in curr:
+                    changes[angle].append(curr[angle] - prev[angle])
                 else:
-                    distance = min(abs(angle - min_angle), abs(angle - max_angle))
-                    confidence_scores.append(1.0 - min(1.0, distance / 45.0))
+                    changes[angle].append(0.0)
         
-        return np.mean(confidence_scores) if confidence_scores else 0.0
+        return changes
     
-    def _determine_sequence_type(self) -> str:
-        """Determine the type of movement sequence"""
-        if len(self.phase_transitions) < 2:
-            return "position_hold"
+    def _determine_sequence_type(self, angle_changes: Dict[str, List[float]]) -> str:
+        # Analyze patterns in angle changes to determine sequence type
+        sword_arm_change = sum(angle_changes['sword_arm'])
+        front_knee_change = sum(angle_changes['front_knee'])
         
-        # Look for specific sequences
-        recent_phases = self.phase_transitions[-3:]
-        
-        if "preparation" in recent_phases and "extension" in recent_phases:
+        if abs(sword_arm_change) > 30 and front_knee_change < -20:
             return "lunge"
-        elif "extension" in recent_phases and "recovery" in recent_phases:
-            return "recovery"
+        elif abs(sword_arm_change) > 20 and abs(front_knee_change) < 10:
+            return "cut"
+        elif abs(sword_arm_change) < 10 and abs(front_knee_change) < 10:
+            return "preparation"
         else:
-            return "transition"
+            return "unknown"
     
-    def _get_temporal_context(self) -> str:
-        """Generate temporal context description"""
-        if len(self.phase_transitions) < 2:
-            return "Initial position"
+    def _determine_phase(self, angle_changes: Dict[str, List[float]]) -> str:
+        # Determine current phase of movement
+        recent_changes = {k: v[-3:] if len(v) >= 3 else v for k, v in angle_changes.items()}
         
-        transitions = " -> ".join(self.phase_transitions[-3:])
-        return f"Movement sequence: {transitions}"
-
-# ------------------------------------------------------------------------------
-# VIDEO PROCESSING
-# ------------------------------------------------------------------------------
+        sword_arm_velocity = sum(recent_changes['sword_arm']) / len(recent_changes['sword_arm'])
+        front_knee_velocity = sum(recent_changes['front_knee']) / len(recent_changes['front_knee'])
+        
+        if abs(sword_arm_velocity) < 5 and abs(front_knee_velocity) < 5:
+            return "preparation"
+        elif sword_arm_velocity > 10 or front_knee_velocity < -10:
+            return "execution"
+        else:
+            return "recovery"
+    
+    def _calculate_confidence(self, angle_changes: Dict[str, List[float]]) -> float:
+        # Calculate confidence based on consistency and magnitude of changes
+        total_change = sum(abs(sum(changes)) for changes in angle_changes.values())
+        consistency = 1.0 - (
+            sum(abs(max(changes, default=0) - min(changes, default=0)) 
+                for changes in angle_changes.values()) / (total_change + 1e-6)
+        )
+        return min(1.0, max(0.0, consistency))
+    
+    def _generate_temporal_context(self, sequence_type: str, phase: str, 
+                                 angle_changes: Dict[str, List[float]]) -> str:
+        # Generate natural language description of movement context
+        if sequence_type == "unknown":
+            return "Movement not recognized"
+        
+        magnitude = sum(abs(sum(changes)) for changes in angle_changes.values())
+        speed = "quickly" if magnitude > 50 else "steadily" if magnitude > 20 else "slowly"
+        
+        return f"Performing a {sequence_type} {speed}, currently in {phase} phase"
 
 class VideoProcessor:
-    """Process video files and extract frames with pose estimation"""
+    """Process video files and extract frames"""
     def __init__(self):
-        self.pose_estimator = PoseEstimator()
         self.frames = []
-        self.frame_angles = []
-        self.frame_captions = []  # Store pre-processed captions
-        self.biomech_analyzer = BiomechanicalAnalyzer()
-        self.movement_analyzer = MovementAnalyzer()
-        self.executor = ThreadPoolExecutor(max_workers=4)
+        self.frame_captions = []
         
-    async def _process_frame_batch(self, frame_batch, start_idx):
-        """Process a batch of frames with RAG API"""
+    def process_frame(self, frame: np.ndarray, frame_count: int, rag_system: GardeRAG, frame_storage: FrameStorage) -> Optional[str]:
+        """Process a single frame and return its caption"""
         try:
-            async with aiohttp.ClientSession() as session:
-                batch_contexts = []
-                batch_prompts = []
-                
-                # Prepare contexts and prompts for the batch
-                for i, (frame, angles) in enumerate(zip(frame_batch, self.frame_angles[start_idx:start_idx + len(frame_batch)])):
-                    frame_idx = start_idx + i
-                    
-                    # Get frame window for sequence context
-                    window_start = max(0, frame_idx - 2)
-                    frame_window = []
-                    for idx in range(window_start, frame_idx + 1):
-                        if idx < len(self.frame_angles) and self.frame_angles[idx] is not None:
-                            curr_angles = self.frame_angles[idx]
-                            frame_window.append({
-                                'angles': {
-                                    'sword_arm': curr_angles.sword_arm_angle if curr_angles.sword_arm_angle is not None else 0.0,
-                                    'front_knee': curr_angles.front_knee_angle if curr_angles.front_knee_angle is not None else 0.0,
-                                    'back_knee': curr_angles.back_knee_angle if curr_angles.back_knee_angle is not None else 0.0,
-                                    'torso': curr_angles.torso_angle if curr_angles.torso_angle is not None else 0.0
-                                }
-                            })
-                    
-                    # Get biomechanical and sequence analysis
-                    frame_data = {
-                        'angles': {
-                            'sword_arm': angles.sword_arm_angle if angles.sword_arm_angle is not None else 0.0,
-                            'front_knee': angles.front_knee_angle if angles.front_knee_angle is not None else 0.0,
-                            'back_knee': angles.back_knee_angle if angles.back_knee_angle is not None else 0.0,
-                            'torso': angles.torso_angle if angles.torso_angle is not None else 0.0
-                        }
-                    }
-                    biomech_analysis = self.biomech_analyzer.analyze_movement(frame_data)
-                    sequence_analysis = self.movement_analyzer.analyze_sequence(frame_window)
-                    
-                    context = {
-                        "movement_phase": {
-                            "sequence": sequence_analysis["sequence"],
-                            "phase": sequence_analysis["phase"],
-                            "confidence": sequence_analysis["confidence"],
-                            "temporal_context": sequence_analysis["temporal_context"]
-                        },
-                        "biomechanics": {
-                            "power_generation": biomech_analysis.power_generation,
-                            "balance_control": biomech_analysis.balance_control,
-                            "movement_efficiency": biomech_analysis.movement_efficiency,
-                            "coordination": biomech_analysis.coordination,
-                            "technical_mastery": biomech_analysis.technical_mastery
-                        },
-                        "current_angles": frame_data['angles']
-                    }
-                    
-                    prompt = f"""Analyze this fencing frame:
-Movement: {context['movement_phase']['sequence']} - {context['movement_phase']['phase']}
-Angles: Sword arm {frame_data['angles']['sword_arm']:.1f}°, Front knee {frame_data['angles']['front_knee']:.1f}°
-Quality: Power {context['biomechanics']['power_generation']:.2f}, Balance {context['biomechanics']['balance_control']:.2f}
-
-Describe the pose and quality in 2-3 sentences. Focus on key technical aspects."""
-                    
-                    batch_contexts.append(context)
-                    batch_prompts.append(prompt)
-                
-                # Process batch with RAG API
-                tasks = []
-                for prompt, context in zip(batch_prompts, batch_contexts):
-                    tasks.append(
-                        session.post(
-                            "http://54.227.20.42/query",
-                            json={
-                                "query": prompt,
-                                "context": context,
-                                "max_tokens": 75,
-                                "temperature": 0.3
-                            },
-                            timeout=30
-                        )
-                    )
-                
-                # Wait for all responses with rate limiting
-                responses = []
-                for i, task in enumerate(tasks):
-                    try:
-                        async with task as response:
-                            if response.status == 200:
-                                result = await response.json()
-                                pose_description = result.get("response", "")
-                            else:
-                                pose_description = "Error getting pose description"
-                            responses.append(pose_description)
-                            
-                            # Add delay between requests
-                            if i < len(tasks) - 1:
-                                await asyncio.sleep(0.2)  # 200ms delay between requests
-                                
-                    except Exception as e:
-                        logger.error(f"Error in RAG API request: {str(e)}")
-                        responses.append("Error analyzing pose")
-                
-                # Create captions for the batch
-                for i, (pose_description, context) in enumerate(zip(responses, batch_contexts)):
-                    biomech = context["biomechanics"]
-                    movement = context["movement_phase"]
-                    
-                    caption = f"""Technical Metrics:
-Power Generation: {biomech['power_generation']:.2f}
-Balance Control: {biomech['balance_control']:.2f}
-Movement Efficiency: {biomech['movement_efficiency']:.2f}
-Coordination: {biomech['coordination']:.2f}
-Overall Mastery: {biomech['technical_mastery']:.2f}
-
-Pose Analysis:
-{pose_description}
-
-Movement Phase: {movement['sequence']} - {movement['phase']}
-{movement['temporal_context']}"""
-                    
-                    self.frame_captions.append(caption)
-                
+            # Save frame to storage
+            frame_obj = frame_storage.save_frame(frame, frame_count, time.time())
+            
+            # Generate caption using GardeRAG - use frame_obj.path instead of frame_obj
+            analysis = rag_system.analyze_frame(str(frame_obj.path))
+            caption = analysis.get('description', 'No caption available')
+            logger.info(f"Generated caption for frame {frame_count}: {caption}")
+            return caption
         except Exception as e:
-            logger.error(f"Error processing frame batch: {str(e)}")
-            return ["Error analyzing pose"] * len(frame_batch)
-    
-    def process_video(self, video_path: str, target_fps: int = 5) -> None:
-        """Process video file and extract frames with pose estimation"""
-        try:
-            logger.info(f"Processing video: {video_path}")
-            
-            # Open video file
-            cap = cv2.VideoCapture(video_path)
-            if not cap.isOpened():
-                raise ValueError("Failed to open video file")
-            
-            # Get video properties
-            orig_fps = cap.get(cv2.CAP_PROP_FPS)
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            
-            # Calculate frame sampling interval
-            sample_interval = max(1, int(orig_fps / target_fps))
-            
-            # Process frames
-            frame_idx = 0
-            self.frames = []
-            self.frame_angles = []
-            self.frame_captions = []
-            
-            # Process frames in batches
-            batch_size = 5
-            current_batch = []
-            batch_start_idx = 0
-            
-            with tqdm(total=total_frames//sample_interval, desc="Processing frames") as pbar:
-                while True:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                        
-                    if frame_idx % sample_interval == 0:
-                        try:
-                            # Convert BGR to RGB
-                            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                            
-                            # Get pose estimation
-                            keypoints, angles = self.pose_estimator.estimate_pose(frame_rgb)
-                            
-                            # Draw pose on frame if keypoints exist
-                            if keypoints is not None and angles is not None:
-                                annotated_frame = frame_rgb.copy()
-                                annotated_frame = self.pose_estimator.draw_pose(annotated_frame, keypoints, angles)
-                            else:
-                                annotated_frame = frame_rgb
-                            
-                            # Add to current batch
-                            current_batch.append(annotated_frame)
-                            self.frames.append(annotated_frame)
-                            self.frame_angles.append(angles)
-                            
-                            # Process batch if full
-                            if len(current_batch) >= batch_size:
-                                # Create event loop for async processing
-                                loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop)
-                                
-                                # Process the batch
-                                loop.run_until_complete(self._process_frame_batch(current_batch, batch_start_idx))
-                                loop.close()
-                                
-                                # Reset batch
-                                current_batch = []
-                                batch_start_idx = len(self.frames)
-                            
-                            pbar.update(1)
-                            
-                        except Exception as e:
-                            logger.error(f"Error processing frame {frame_idx}: {str(e)}")
-                            continue
-                            
-                    frame_idx += 1
-            
-            # Process remaining frames
-            if current_batch:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(self._process_frame_batch(current_batch, batch_start_idx))
-                loop.close()
-            
-            cap.release()
-            logger.info(f"Processed {len(self.frames)} frames")
-            
-        except Exception as e:
-            logger.error(f"Error processing video: {str(e)}")
-            raise
+            logger.error(f"Error processing frame {frame_count}: {str(e)}")
+            return f"Error: {str(e)}"
 
 # ------------------------------------------------------------------------------
 # ROUTES
@@ -534,7 +244,7 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload_video():
-    global video_processor
+    global video_processor, frame_storage, rag_system
     try:
         if 'video' not in request.files:
             return jsonify({'error': 'No video file uploaded'}), 400
@@ -550,16 +260,86 @@ def upload_video():
         try:
             # Initialize video processing
             video_processor = VideoProcessor()
-            video_processor.process_video(video_path)
+            
+            # Process video and store frames
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                raise ValueError(f"Could not open video file: {video_path}")
+                
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            logger.info(f"Processing video: {video_path}")
+            logger.info(f"FPS: {fps}, Total frames: {total_frames}")
+            
+            # More aggressive frame sampling - 1 frame every 3 seconds
+            sample_rate = int(fps * 3)
+            target_frames = min(8, total_frames // sample_rate)  # Limit to 8 frames max for better memory management
+            
+            # Calculate actual sample rate to get target number of frames
+            sample_rate = max(int(total_frames / target_frames), 1)
+            
+            logger.info(f"Processing video with {total_frames} total frames, sampling every {sample_rate} frames")
+            
+            # Downscale frames for faster processing - using 448x448 as recommended for CLIP
+            target_size = (448, 448)  # Match CLIP model's expected size
+            
+            frame_count = 0
+            frames = []
+            frame_captions = []
+            
+            # Process frames in batches for better memory efficiency
+            batch_size = 2  # Process 2 frames at a time
+            current_batch = []
+            
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                    
+                if frame_count % sample_rate == 0:
+                    # Resize frame
+                    frame = cv2.resize(frame, target_size)
+                    current_batch.append((frame, frame_count))
+                    
+                    # Process batch when full
+                    if len(current_batch) >= batch_size:
+                        for batch_frame, batch_count in current_batch:
+                            frames.append(batch_frame)
+                            caption = video_processor.process_frame(batch_frame, batch_count, rag_system, frame_storage)
+                            frame_captions.append(caption)
+                        current_batch = []
+                        
+                        # Break if we have enough frames
+                        if len(frames) >= target_frames:
+                            break
+                    
+                frame_count += 1
+                
+            # Process remaining frames in the last batch
+            if current_batch and len(frames) < target_frames:
+                for batch_frame, batch_count in current_batch:
+                    frames.append(batch_frame)
+                    caption = video_processor.process_frame(batch_frame, batch_count, rag_system, frame_storage)
+                    frame_captions.append(caption)
+                    
+            cap.release()
+            
+            # Store processed frames and captions
+            video_processor.frames = frames
+            video_processor.frame_captions = frame_captions
+            
+            logger.info(f"Successfully processed {len(frames)} frames with {len(frame_captions)} captions")
             
             return jsonify({
                 'message': 'Video processed successfully',
-                'total_frames': len(video_processor.frames)
+                'total_frames': len(frames),
+                'total_captions': len(frame_captions)
             })
             
         except Exception as e:
             logger.error(f"Error processing video: {str(e)}")
-            return jsonify({'error': 'Error processing video'}), 500
+            return jsonify({'error': f'Error processing video: {str(e)}'}), 500
             
     except Exception as e:
         logger.error(f"Error in upload: {str(e)}")
@@ -567,7 +347,7 @@ def upload_video():
 
 @app.route('/chat', methods=['POST'])
 def chat():
-    global video_processor
+    global video_processor, rag_system, frame_storage
     try:
         if not video_processor:
             return jsonify({'error': 'Please upload a video first'}), 400
@@ -576,177 +356,25 @@ def chat():
         if not data or 'query' not in data:
             return jsonify({'error': 'No query provided'}), 400
             
-        query = data['query'].lower()
+        query = data['query']
         current_frame = data.get('current_frame', 0)
         
-        # Get frame window for analysis
-        frame_window = []
-        start_idx = max(0, current_frame - 5)
-        for idx in range(start_idx, current_frame + 1):
-            frame_data = {
-                'angles': {
-                    'sword_arm': video_processor.frame_angles[idx].sword_arm_angle,
-                    'front_knee': video_processor.frame_angles[idx].front_knee_angle,
-                    'back_knee': video_processor.frame_angles[idx].back_knee_angle,
-                    'torso': video_processor.frame_angles[idx].torso_angle
-                }
-            }
-            frame_window.append(frame_data)
-        
-        # Perform movement sequence analysis
-        sequence_analysis = video_processor.movement_analyzer.analyze_sequence(frame_window)
-        
-        # Perform biomechanical analysis
-        biomech_analysis = video_processor.biomech_analyzer.analyze_movement(frame_window[-1])
-        
-        # Create rich context for RAG
-        context = {
-            "movement_phase": {
-                "sequence": sequence_analysis["sequence"],
-                "phase": sequence_analysis["phase"],
-                "confidence": sequence_analysis["confidence"],
-                "temporal_context": sequence_analysis["temporal_context"]
-            },
-            "biomechanics": {
-                "power_generation": biomech_analysis.power_generation,
-                "balance_control": biomech_analysis.balance_control,
-                "movement_efficiency": biomech_analysis.movement_efficiency,
-                "coordination": biomech_analysis.coordination,
-                "technical_mastery": biomech_analysis.technical_mastery
-            },
-            "current_angles": frame_window[-1]['angles']
-        }
-        
-        # Determine the type of question and create appropriate prompt
-        if any(word in query for word in ['hi', 'hello', 'hey']):
-            prompt = """You are a friendly fencing coach. The student just said hello.
-Give a warm, brief greeting and ask how you can help them with their fencing technique today.
-Keep it casual and encouraging, like a real coach."""
-            
-        elif any(word in query for word in ['what am i doing', 'what actions', 'what movement']):
-            prompt = f"""You are a friendly fencing coach. The student wants to know what movements they're performing.
-Current Movement Sequence: {sequence_analysis['temporal_context']}
-Current Phase: {context['movement_phase']['sequence']} - {context['movement_phase']['phase']}
-
-Describe what they're doing in simple, clear terms. Focus on the actual movements first, then maybe ONE key observation about their form.
-Keep it conversational, like you're watching them in person.
-
-Example: "You're working on a lunge sequence. I can see you preparing with good back leg positioning, though you might want to adjust your sword arm a bit."
-"""
-        else:
-            # Default coaching prompt for other questions
-            prompt = f"""You are a friendly fencing coach having a conversation with your student.
-
-Current Movement: {context['movement_phase']['sequence']} - {context['movement_phase']['phase']}
-Technical Context:
-- Power Generation: {context['biomechanics']['power_generation']:.2f}
-- Balance Control: {context['biomechanics']['balance_control']:.2f}
-- Movement Efficiency: {context['biomechanics']['movement_efficiency']:.2f}
-- Coordination: {context['biomechanics']['coordination']:.2f}
-
-Student Question: {query}
-
-Answer like a real coach would in person:
-1. Be conversational and encouraging
-2. Address their question directly
-3. Maybe add ONE specific tip if relevant
-4. Keep it natural - don't list numbers unless specifically asked
-
-Example: "That's a good question! Your lunge is looking strong, but try focusing on extending your sword arm fully before pushing off."
-"""
+        logger.info(f"Processing chat query: {query} for frame {current_frame}")
         
         try:
-            # Process in batches to avoid rate limiting
-            max_retries = 3
-            retry_delay = 2
+            # Get response from RAG system
+            response = rag_system.chat(query, frame_index=current_frame)
+            logger.info(f"Generated response: {response}")
             
-            async def process_rag_request():
-                async with aiohttp.ClientSession() as session:
-                    try:
-                        async with session.post(
-                            "http://54.227.20.42/query",
-                            json={
-                                "query": prompt,
-                                "context": context,
-                                "max_tokens": 100,
-                                "temperature": 0.7,  # Increased for more natural variation
-                                "response_format": {
-                                    "type": "text",
-                                    "max_length": 200
-                                }
-                            },
-                            timeout=30
-                        ) as response:
-                            if response.status == 200:
-                                result = await response.json()
-                                return result.get("response", "")
-                            else:
-                                logger.error(f"RAG API error: {response.status}")
-                                return None
-                    except Exception as e:
-                        logger.error(f"RAG API request error: {str(e)}")
-                        return None
-            
-            # Create event loop for async processing
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            for attempt in range(max_retries):
-                try:
-                    feedback = loop.run_until_complete(process_rag_request())
-                    if feedback:
-                        # Format the feedback
-                        def format_coaching_feedback(text):
-                            # Remove verbose patterns
-                            patterns = [
-                                "As a fencing coach, ",
-                                "Based on the video, ",
-                                "I can observe that ",
-                                "It's important to note that ",
-                                "I notice that ",
-                                "I see that ",
-                                "Your ",
-                                "I would ",
-                                "Let me "
-                            ]
-                            for pattern in patterns:
-                                text = text.replace(pattern, "")
-                            
-                            # Clean up any leftover artifacts
-                            text = text.strip()
-                            if text.lower().startswith("your"):
-                                text = text[4:].strip()
-                            if text.lower().startswith("i see"):
-                                text = text[5:].strip()
-                            if text.lower().startswith("i notice"):
-                                text = text[8:].strip()
-                            
-                            # Capitalize first letter
-                            text = text[0].upper() + text[1:]
-                            
-                            return text
-                        
-                        feedback = format_coaching_feedback(feedback)
-                        
-                        return jsonify({'response': feedback})
-                    
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay * (attempt + 1))
-                        continue
-                    else:
-                        return jsonify({'error': 'Error generating coaching feedback'}), 500
-                        
-                except Exception as e:
-                    if attempt == max_retries - 1:
-                        logger.error(f"Error in chat: {str(e)}")
-                        return jsonify({'error': str(e)}), 500
-                    time.sleep(retry_delay * (attempt + 1))
-                    
-            loop.close()
-            
+            if isinstance(response, str):
+                return jsonify({'response': response})
+            else:
+                return jsonify({'error': 'Invalid response format'}), 500
+                
         except Exception as e:
-            logger.error(f"Error in chat: {str(e)}")
-            return jsonify({'error': str(e)}), 500
+            logger.error(f"Error in chat processing: {str(e)}")
+            return jsonify({'error': f'Error processing chat: {str(e)}'}), 500
+            
     except Exception as e:
         logger.error(f"Error in chat: {str(e)}")
         return jsonify({'error': str(e)}), 500
@@ -759,7 +387,14 @@ def get_frame(frame_idx):
             return jsonify({'error': 'Invalid frame index'}), 400
             
         frame = video_processor.frames[frame_idx]
-        caption = video_processor.frame_captions[frame_idx] if frame_idx < len(video_processor.frame_captions) else "No caption available"
+        
+        # Get caption for this frame
+        caption = "No caption available"
+        if hasattr(video_processor, 'frame_captions') and frame_idx < len(video_processor.frame_captions):
+            caption = video_processor.frame_captions[frame_idx]
+            logger.info(f"Retrieved caption for frame {frame_idx}: {caption}")
+        else:
+            logger.warning(f"No caption available for frame {frame_idx}")
         
         try:
             # Convert frame to base64
