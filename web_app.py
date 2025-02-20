@@ -457,7 +457,7 @@ class MovementAnalyzer:
 # ------------------------------------------------------------------------------
 
 class VideoProcessor:
-    """Process video files and extract frames using VidiQA's approach"""
+    """Process video files and extract frames using MiniCPM-V's approach"""
     _instance = None  # Singleton instance
     
     def __new__(cls):
@@ -475,19 +475,25 @@ class VideoProcessor:
         self.processing_complete = False
         
         # Initialize paths
-        base_dir = os.getcwd()
-        self.model_path = os.path.join(base_dir, "MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf")
-        self.mmproj_path = os.path.join(base_dir, "MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf")
-        self.cli_path = os.path.join(base_dir, "llama.cpp/build/bin/llama-minicpmv-cli")
+        self.base_dir = os.path.abspath(os.getcwd())
+        self.model_path = os.path.join(self.base_dir, "MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf")
+        self.mmproj_path = os.path.join(self.base_dir, "MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf")
+        self.cli_path = os.path.join(self.base_dir, "llama.cpp/build/bin/llama-minicpmv-cli")
+        
+        # Create a more persistent temp directory
+        self.temp_dir = os.path.join(self.base_dir, 'temp_frames')
+        if not os.path.exists(self.temp_dir):
+            os.makedirs(self.temp_dir, exist_ok=True)
         
         print(f"Model path: {self.model_path}")
         print(f"MMPROJ path: {self.mmproj_path}")
         print(f"CLI path: {self.cli_path}")
+        print(f"Temp dir: {self.temp_dir}")
         
         self._initialized = True
     
     def process_video(self, video_path: str) -> None:
-        """Process video file and extract frames using VidiQA's approach"""
+        """Process video file and extract frames using MiniCPM-V's approach"""
         try:
             print("\n" + "="*50)
             print("Starting video processing...")
@@ -554,21 +560,28 @@ class VideoProcessor:
             print("\nProcessing frames with MiniCPM-V...")
             for i, frame in enumerate(self.frames):
                 print(f"\nProcessing frame {i+1}/{len(self.frames)}")
-                temp_path = f"/tmp/frame_{int(time.time() * 1000)}.jpg"
+                temp_path = os.path.join(self.temp_dir, f"frame_{i+1}.jpg")
                 
                 try:
-                    # Save frame as temporary file
-                    success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-                    if not success:
-                        print(f"Warning: Failed to save frame {i}")
+                    # Save frame as temporary file with high quality
+                    success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+                                        [cv2.IMWRITE_JPEG_QUALITY, 100])
+                    if not success or not os.path.exists(temp_path):
+                        print(f"Warning: Failed to save frame {i+1}")
                         self.frame_captions.append("Failed to save frame")
                         continue
                     
-                    # Construct command for single frame - using working parameters
+                    # Verify file exists and has content
+                    if not os.path.getsize(temp_path) > 0:
+                        print(f"Warning: Empty frame file for frame {i+1}")
+                        self.frame_captions.append("Empty frame file")
+                        continue
+                    
+                    # Construct command with absolute paths
                     cmd = [
-                        self.cli_path,
-                        "-m", self.model_path,
-                        "--mmproj", self.mmproj_path,
+                        os.path.abspath(self.cli_path),
+                        "-m", os.path.abspath(self.model_path),
+                        "--mmproj", os.path.abspath(self.mmproj_path),
                         "-t", "4",
                         "-n", "512",
                         "--temp", "0.1",
@@ -576,7 +589,8 @@ class VideoProcessor:
                         "--repeat-penalty", "1.1",
                         "--top-p", "0.7",
                         "--top-k", "40",
-                        "--image", temp_path,
+                        "-ngl", "0",  # Disable GPU layers
+                        "--image", os.path.abspath(temp_path),
                         "-p", "Describe what is happening in this frame."
                     ]
                     
@@ -587,8 +601,9 @@ class VideoProcessor:
                         cmd,
                         capture_output=True,
                         text=True,
-                        timeout=120,  # Increased from 60 to 120 seconds
-                        check=True
+                        timeout=120,  # 2 minutes timeout
+                        check=True,
+                        cwd=self.base_dir  # Run from base directory
                     )
                     
                     # Process output
@@ -597,7 +612,8 @@ class VideoProcessor:
                         if line.strip()
                         and not any(x in line.lower() for x in
                                   ['loading', 'llama_print', 'log start', 'clip_model',
-                                   'user:', 'assistant:', '<user>', '<assistant>'])
+                                   'user:', 'assistant:', '<user>', '<assistant>',
+                                   'key clip.vision', 'warning:', 'error:'])
                     )
                     
                     if response:
@@ -617,12 +633,8 @@ class VideoProcessor:
                     print(f"Unexpected error for frame {i+1}: {str(e)}")
                     self.frame_captions.append("Processing error")
                 finally:
-                    # Clean up temp file
-                    try:
-                        if os.path.exists(temp_path):
-                            os.remove(temp_path)
-                    except Exception as e:
-                        print(f"Failed to clean up {temp_path}: {str(e)}")
+                    # Keep temp files for debugging
+                    print(f"Frame {i+1} saved at: {temp_path}")
             
             if len(self.frames) == 0:
                 raise ValueError("No frames were extracted")
