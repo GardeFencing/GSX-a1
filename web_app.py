@@ -18,13 +18,11 @@ import asyncio
 import aiohttp
 import subprocess
 from pathlib import Path
-from werkzeug.utils import secure_filename
 
 # Import ML models
 from transformers import CLIPProcessor, CLIPModel
 from sentence_transformers import SentenceTransformer
 from pose_estimator import PoseEstimator, JointAngles
-from src.app.model import MiniCPMVProcessor
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -63,9 +61,6 @@ clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device
 clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 sent_transformer = SentenceTransformer("all-MiniLM-L6-v2", device=device)
 
-# Initialize model
-model_processor = MiniCPMVProcessor()
-
 # ------------------------------------------------------------------------------
 # MINICPMV INTEGRATION
 # ------------------------------------------------------------------------------
@@ -103,29 +98,19 @@ class MiniCPMVProcessor:
         """Process multiple frames with MiniCPM-V"""
         temp_paths = []
         try:
-            print(f"\nMiniCPMV processing {len(frames)} frames")
-            print(f"CLI path: {self.cli_path}")
-            print(f"Model path: {self.model_path}")
-            print(f"MMPROJ path: {self.mmproj_path}")
-            
             # Save frames as temporary images
             for i, frame in enumerate(frames):
                 temp_path = os.path.join(self.temp_dir, f"temp_frame_{int(time.time() * 1000)}_{i}.jpg")
-                print(f"Saving frame {i} to {temp_path}")
                 success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
                                     [cv2.IMWRITE_JPEG_QUALITY, 95])
                 
                 if not success or not os.path.exists(temp_path):
-                    print(f"Failed to save frame {i}")
                     continue
                     
                 temp_paths.append(temp_path)
             
             if not temp_paths:
-                print("No frames were saved successfully")
                 return "Error: Failed to save frames"
-            
-            print(f"Successfully saved {len(temp_paths)} frames")
             
             # Construct command with multi-image support
             cmd = [
@@ -151,15 +136,11 @@ class MiniCPMVProcessor:
             # Add query
             cmd.extend(["-p", query])
             
-            print("\nExecuting command:")
-            print(" ".join(cmd))
-            
             # Run the command with retry mechanism
             max_retries = 3
             retry_count = 0
             while retry_count < max_retries:
                 try:
-                    print(f"\nAttempt {retry_count + 1}/{max_retries}")
                     result = subprocess.run(
                         cmd, 
                         capture_output=True, 
@@ -167,10 +148,6 @@ class MiniCPMVProcessor:
                         timeout=60,  # Increased timeout for multi-image
                         cwd=os.getcwd()
                     )
-                    
-                    print(f"Return code: {result.returncode}")
-                    print("Stdout:", result.stdout[:500] + "..." if len(result.stdout) > 500 else result.stdout)
-                    print("Stderr:", result.stderr[:500] + "..." if len(result.stderr) > 500 else result.stderr)
                     
                     # Process output
                     if result.returncode == 0 and result.stdout:
@@ -183,39 +160,32 @@ class MiniCPMVProcessor:
                                       ['loading', 'llama_print', 'log start', 'clip_model', 
                                        'user:', 'assistant:', '<user>', '<assistant>'])
                         )
-                        print(f"\nProcessed response: {response[:200]}...")
                         return response if response else "Error: No caption generated"
                     else:
                         retry_count += 1
                         if retry_count < max_retries:
-                            print(f"Command failed, retrying in 1 second...")
                             time.sleep(1)  # Wait before retrying
                             continue
                         return f"Error: Command failed with code {result.returncode}"
                         
                 except subprocess.TimeoutExpired:
-                    print("Command timed out")
                     retry_count += 1
                     if retry_count < max_retries:
-                        print(f"Timeout, retrying in 1 second...")
                         time.sleep(1)  # Wait before retrying
                         continue
                     return "Error: Processing timeout after retries"
                     
         except Exception as e:
-            print(f"Error in process_frames: {str(e)}")
             return f"Error: {str(e)}"
             
         finally:
             # Clean up temp files
-            print("\nCleaning up temporary files...")
             for temp_path in temp_paths:
                 try:
                     if os.path.exists(temp_path):
                         os.remove(temp_path)
-                        print(f"Removed {temp_path}")
-                except Exception as e:
-                    print(f"Failed to remove {temp_path}: {str(e)}")
+                except:
+                    pass
     
     def process_frame(self, frame: np.ndarray, query: str = "Describe this image briefly.") -> str:
         """Process a single frame with MiniCPM-V (legacy method)"""
@@ -485,7 +455,6 @@ class VideoProcessor:
     
     def __new__(cls):
         if cls._instance is None:
-            print("Creating new VideoProcessor instance")
             cls._instance = super(VideoProcessor, cls).__new__(cls)
             cls._instance._initialized = False
         return cls._instance
@@ -494,14 +463,13 @@ class VideoProcessor:
         if self._initialized:
             return
             
-        print("Initializing VideoProcessor")
         self.frames = []
         self.frame_captions = []
         self.processing_complete = False
         
         # Enhanced batch processing settings
-        self.batch_size = 16  # Process more frames at once
-        self.max_workers = min(32, (os.cpu_count() or 1) * 2)
+        self.batch_size = 16  # Increased batch size
+        self.max_workers = min(32, (os.cpu_count() or 1) * 2)  # More workers
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
         
         # Create temp directory
@@ -509,92 +477,87 @@ class VideoProcessor:
         if not os.path.exists(self.temp_dir):
             os.makedirs(self.temp_dir, exist_ok=True)
             
-        # Initialize model and tokenizer
+        # Initialize MiniCPMV processor
         try:
-            from src.app.model import load_model_and_tokenizer
-            self.model, self.tokenizer = load_model_and_tokenizer()
-            print("Model and tokenizer initialized successfully")
+            self.minicpmv_processor = MiniCPMVProcessor()
+            print("MiniCPMV processor initialized successfully")
             self._initialized = True
         except Exception as e:
-            print(f"Error initializing model: {str(e)}")
+            print(f"Error initializing MiniCPMV processor: {str(e)}")
             raise
     
-    def _process_frame_batch(self, frames_data):
-        """Process a batch of frames using multi-image inference"""
+    def _get_temp_path(self, frame_idx: int, retry_count: int = 0) -> str:
+        """Get path for temporary frame file"""
+        return os.path.join(self.temp_dir, f"frame_{frame_idx}_{retry_count}.jpg")
+    
+    def _cleanup_temp_files(self):
+        """Clean up temporary files"""
         try:
-            print(f"\nProcessing batch of {len(frames_data)} frames")
+            for file in os.listdir(self.temp_dir):
+                if file.endswith('.jpg'):
+                    try:
+                        os.remove(os.path.join(self.temp_dir, file))
+                    except:
+                        pass
+        except:
+            pass
+    
+    def _preprocess_frame(self, frame: np.ndarray) -> np.ndarray:
+        """Preprocess a single frame"""
+        try:
+            # Convert BGR to RGB
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             
-            # Preprocess frames
+            # Resize frame for MiniCPM-V
+            frame_resized = cv2.resize(frame_rgb, (448, 448))
+            
+            return frame_resized
+                
+        except Exception as e:
+            print(f"\rError in frame preprocessing: {str(e)}", flush=True)
+            return None
+
+    def _process_frame_batch(self, frames_data):
+        """Process a batch of frames in parallel"""
+        try:
+            # Preprocess all frames in the batch
             processed_frames = []
             frame_indices = []
             
             for frame, frame_idx in frames_data:
-                print(f"Preprocessing frame {frame_idx}")
                 frame_processed = self._preprocess_frame(frame)
                 if frame_processed is not None:
-                    # Convert to PIL Image for model input
-                    pil_image = Image.fromarray(frame_processed)
-                    processed_frames.append(pil_image)
+                    processed_frames.append(frame_processed)
                     frame_indices.append(frame_idx)
             
             if not processed_frames:
-                print("No frames were preprocessed successfully")
                 return []
             
-            print(f"Successfully preprocessed {len(processed_frames)} frames")
-            
-            # Example few-shot prompts for better context
-            few_shot_examples = [
-                {
-                    "question": "What is happening in this sequence?",
-                    "answer": "The sequence shows a continuous movement or action across multiple frames."
-                },
-                {
-                    "question": "Describe any changes between frames.",
-                    "answer": "There are subtle changes in position and movement between consecutive frames."
-                }
-            ]
-            
-            # Generate captions using multi-image inference
-            from src.app.model import generate_response
-            captions = generate_response(
-                self.model,
-                self.tokenizer,
+            # Process the batch together
+            system_prompt = "You are analyzing a sequence of video frames. Describe each frame briefly and note any changes or movements."
+            captions = self.minicpmv_processor.process_frames(
                 processed_frames,
-                "Describe these frames in sequence, noting any changes or movements between them.",
-                few_shot_examples=few_shot_examples
+                system_prompt=system_prompt,
+                query="Describe these frames in sequence, noting any changes or movements between them."
             )
             
-            if not captions:
-                print("Failed to generate captions")
-                return []
-            
-            print(f"\nReceived caption response: {captions[:200]}...")
-            
-            # Split into individual frame captions
+            # Split the caption into individual frame descriptions
             try:
                 frame_captions = captions.split('\n')
-                print(f"Split into {len(frame_captions)} individual captions")
-                
                 # Ensure we have enough captions
                 while len(frame_captions) < len(processed_frames):
                     frame_captions.append("No specific description available")
-                
                 # Trim excess captions
-                if len(frame_captions) > len(processed_frames):
-                    frame_captions = frame_captions[:len(processed_frames)]
-                
-            except Exception as e:
-                print(f"Error splitting captions: {str(e)}")
+                frame_captions = frame_captions[:len(processed_frames)]
+            except:
+                # Fallback: use the same caption for all frames
                 frame_captions = [captions] * len(processed_frames)
             
             # Return results
-            results = list(zip(processed_frames, frame_captions))
-            print(f"Returning {len(results)} frame-caption pairs")
-            return results
+            return list(zip(processed_frames, frame_captions))
                 
         except Exception as e:
-            print(f"\nError in _process_frame_batch: {str(e)}")
+            print(f"\nError processing batch: {str(e)}")
             return []
     
     def process_video(self, video_path: str, target_fps: int = 5) -> None:
@@ -629,12 +592,12 @@ class VideoProcessor:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
                     ret, frame = cap.read()
                     if not ret:
-                    continue
-                
+                            continue
+                            
                 current_batch.append((frame, frame_idx))
                 if len(current_batch) >= self.batch_size:
                     frame_batches.append(current_batch)
-                                current_batch = []
+                    current_batch = []
             
             if current_batch:
                 frame_batches.append(current_batch)
@@ -673,134 +636,100 @@ def index():
     return render_template('index.html')
 
 @app.route('/upload', methods=['POST'])
-def upload_file():
+def upload_video():
+    global video_processor
     try:
-        if 'file' not in request.files:
-            return jsonify({'error': 'No file part'}), 400
+        if 'video' not in request.files:
+            return jsonify({'error': 'No video file uploaded'}), 400
             
-        file = request.files['file']
-        if file.filename == '':
+        video_file = request.files['video']
+        if video_file.filename == '':
             return jsonify({'error': 'No selected file'}), 400
             
-        if file and allowed_file(file.filename):
-            # Save uploaded file
-            filename = secure_filename(file.filename)
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(filepath)
+        # Save the uploaded file
+        video_path = os.path.join(app.config['UPLOAD_FOLDER'], video_file.filename)
+        video_file.save(video_path)
+        
+        try:
+            # Initialize video processing if not already initialized
+            if video_processor is None:
+            video_processor = VideoProcessor()
             
-            # Process frames
-            frames = extract_frames(filepath)
-            if not frames:
-                return jsonify({'error': 'Failed to extract frames'}), 500
-                
-            # Generate caption
-            caption = model_processor.process_frames(frames)
-            if caption.startswith('Error:'):
-                return jsonify({'error': caption}), 500
+            # Process video and wait for completion
+            video_processor.process_video(video_path)
             
+            # Only return success if processing is complete
+            if video_processor.processing_complete:
             return jsonify({
-                'caption': caption,
-                'filename': filename
+                'message': 'Video processed successfully',
+                'total_frames': len(video_processor.frames)
             })
+            else:
+                return jsonify({'error': 'Video processing incomplete'}), 500
             
-        return jsonify({'error': 'Invalid file type'}), 400
+        except Exception as e:
+            logger.error(f"Error processing video: {str(e)}")
+            return jsonify({'error': str(e)}), 500
             
     except Exception as e:
-        app.logger.error(f"Error in upload_file: {str(e)}")
+        logger.error(f"Error in upload: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/chat', methods=['POST'])
 def chat():
     global video_processor
     try:
-        print("\n=== Chat Request ===")
-        print(f"Video processor exists: {video_processor is not None}")
-        print(f"Video processor initialized: {video_processor._initialized if video_processor else False}")
-        print(f"Processing complete: {video_processor.processing_complete if video_processor else False}")
-        print(f"Total frames: {len(video_processor.frames) if video_processor else 0}")
-        print(f"Total captions: {len(video_processor.frame_captions) if video_processor else 0}")
-        
-        if not video_processor or not video_processor._initialized:
-            print("Error: Video processor not initialized")
+        print(f"Chat request received. Video processor state: {video_processor is not None}")
+        if not video_processor:
             return jsonify({'error': 'Please upload a video first'}), 400
             
+        print(f"Processing complete: {video_processor.processing_complete}, Frames: {len(video_processor.frames)}, Captions: {len(video_processor.frame_captions)}")
         if not video_processor.processing_complete:
-            print("Error: Video still processing")
             return jsonify({'error': 'Video is still processing'}), 400
             
         data = request.get_json()
-        print(f"Request data: {data}")
-        
         if not data or 'query' not in data:
-            print("Error: No query provided")
             return jsonify({'error': 'No query provided'}), 400
             
         query = data['query']
         current_frame = data.get('current_frame', 0)
-        print(f"Processing query: '{query}' for frame {current_frame}")
+        print(f"Processing query: {query} for frame {current_frame}")
         
         # Ensure current_frame is within bounds
         if current_frame >= len(video_processor.frames):
-            print(f"Adjusting frame index from {current_frame} to {len(video_processor.frames) - 1}")
             current_frame = len(video_processor.frames) - 1
             
-        # Get frames for context window
+        # Get current frame and its context
         frame_context = []
         start_idx = max(0, current_frame - 2)
         end_idx = min(len(video_processor.frames), current_frame + 3)
         
-        print(f"Getting context frames {start_idx} to {end_idx}")
-        
-        # Convert frames to PIL Images
+        # Get 5 frames around the current frame for context
         for i in range(start_idx, end_idx):
-            frame = video_processor.frames[i]
-            if isinstance(frame, np.ndarray):
-                frame = Image.fromarray(frame)
-            frame_context.append(frame)
+            frame_context.append(video_processor.frames[i])
         
-        print(f"Got {len(frame_context)} context frames")
+        # Create a context-aware prompt
+        system_prompt = f"""You are analyzing a video sequence. The user is currently viewing frame {current_frame + 1} of {len(video_processor.frames)}.
+        The frame shows: {video_processor.frame_captions[current_frame]}
         
-        # Create few-shot examples based on previous captions
-        few_shot_examples = []
-        if len(video_processor.frame_captions) > 0:
-            # Add example from start of video
-            few_shot_examples.append({
-                "question": "What is happening at the start of the video?",
-                "answer": video_processor.frame_captions[0]
-            })
-            
-            # Add example from middle of video
-            mid_idx = len(video_processor.frame_captions) // 2
-            few_shot_examples.append({
-                "question": "What is happening in the middle of the video?",
-                "answer": video_processor.frame_captions[mid_idx]
-            })
-            
-            # Add temporal context example
-            if current_frame > 0:
-                few_shot_examples.append({
-                    "question": "What changed from the previous frame?",
-                    "answer": f"From {video_processor.frame_captions[current_frame-1]} to {video_processor.frame_captions[current_frame]}"
-                })
+        Previous context: {' '.join(video_processor.frame_captions[start_idx:current_frame])}
+        Next context: {' '.join(video_processor.frame_captions[current_frame + 1:end_idx])}
         
-        # Generate response using multi-image inference
-        from src.app.model import generate_response
-        response = generate_response(
-            video_processor.model,
-            video_processor.tokenizer,
+        Please answer the following question about the video: {query}
+        """
+        
+        print("Sending query to MiniCPM-V processor...")
+        # Process the query with context
+        response = video_processor.minicpmv_processor.process_frames(
             frame_context,
-            query,
-            few_shot_examples=few_shot_examples
+            system_prompt=system_prompt,
+            query=query
         )
+        print(f"Got response: {response}")
         
-        if not response:
-            print("Failed to generate response")
-            return jsonify({'error': 'Failed to generate response'}), 500
-            
-        print(f"Generated response: {response[:200]}...")
         return jsonify({'response': response})
             
-                    except Exception as e:
+    except Exception as e:
         print(f"Error in chat: {str(e)}")
         logger.error(f"Error in chat: {str(e)}")
         return jsonify({'error': str(e)}), 500
@@ -809,57 +738,35 @@ def chat():
 def get_frame(frame_idx):
     global video_processor
     try:
-        print("\n=== Get Frame Request ===")
-        print(f"Requested frame index: {frame_idx}")
-        print(f"Video processor exists: {video_processor is not None}")
-        print(f"Video processor initialized: {video_processor._initialized if video_processor else False}")
-        
-        if not video_processor or not video_processor._initialized:
-            print("Error: Video processor not initialized")
-            return jsonify({'error': 'Please upload a video first'}), 400
-            
-        print(f"Total frames: {len(video_processor.frames)}")
-        print(f"Total captions: {len(video_processor.frame_captions)}")
-        
-        if frame_idx >= len(video_processor.frames):
-            print(f"Error: Frame index {frame_idx} out of bounds")
+        if not video_processor or frame_idx >= len(video_processor.frames):
             return jsonify({'error': 'Invalid frame index'}), 400
             
         frame = video_processor.frames[frame_idx]
         caption = video_processor.frame_captions[frame_idx] if frame_idx < len(video_processor.frame_captions) else "No caption available"
         
-        print(f"Frame shape: {frame.shape if isinstance(frame, np.ndarray) else 'PIL Image'}")
-        print(f"Caption: {caption[:100]}...")
-        
         try:
             # Convert frame to base64
             if isinstance(frame, Image.Image):
-                print("Converting PIL Image to base64")
                 img_byte_arr = io.BytesIO()
                 frame.save(img_byte_arr, format='JPEG')
                 img_byte_arr = img_byte_arr.getvalue()
                 frame_b64 = base64.b64encode(img_byte_arr).decode('utf-8')
             else:
-                print("Converting numpy array to base64")
                 _, buffer = cv2.imencode('.jpg', frame)
                 frame_b64 = base64.b64encode(buffer).decode('utf-8')
             
-            response = {
+            return jsonify({
                 'frame': frame_b64,
                 'caption': caption,
                 'frame_number': frame_idx,
                 'total_frames': len(video_processor.frames)
-            }
-            print("Successfully prepared frame response")
-            return jsonify(response)
+            })
             
         except Exception as e:
-            print(f"Error processing frame: {str(e)}")
             logger.error(f"Error processing frame: {str(e)}")
             return jsonify({'error': 'Error processing frame'}), 500
             
     except Exception as e:
-        print(f"Error getting frame: {str(e)}")
         logger.error(f"Error getting frame: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
