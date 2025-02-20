@@ -94,32 +94,47 @@ class MiniCPMVProcessor:
         if not os.path.exists(self.cli_path):
             raise ValueError(f"CLI executable not found: {self.cli_path}")
     
-    def process_frame(self, frame: np.ndarray, query: str = "What specific fencing position or technique is being demonstrated in this image? Focus on the stance, blade position, and body alignment.") -> str:
-        """Process a single frame with MiniCPM-V"""
-        temp_img_path = None
+    def process_frames(self, frames: List[np.ndarray], system_prompt: str = None, query: str = "Describe these frames in detail.") -> str:
+        """Process multiple frames with MiniCPM-V"""
+        temp_paths = []
         try:
-            # Save frame as temporary image with unique timestamp
-            temp_img_path = os.path.join(self.temp_dir, f"temp_frame_{int(time.time() * 1000)}.jpg")
-            success = cv2.imwrite(temp_img_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR), 
-                                [cv2.IMWRITE_JPEG_QUALITY, 95])
+            # Save frames as temporary images
+            for i, frame in enumerate(frames):
+                temp_path = os.path.join(self.temp_dir, f"temp_frame_{int(time.time() * 1000)}_{i}.jpg")
+                success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+                                    [cv2.IMWRITE_JPEG_QUALITY, 95])
+                
+                if not success or not os.path.exists(temp_path):
+                    continue
+                    
+                temp_paths.append(temp_path)
             
-            if not success or not os.path.exists(temp_img_path):
-                return "Error: Failed to save frame"
+            if not temp_paths:
+                return "Error: Failed to save frames"
             
-            # Construct command with minimal arguments and increased context size
+            # Construct command with multi-image support
             cmd = [
                 self.cli_path,
                 "-m", os.path.abspath(self.model_path),
                 "--mmproj", os.path.abspath(self.mmproj_path),
-                "--image", os.path.abspath(temp_img_path),
                 "-t", str(self.n_threads),
-                "-n", "96",  # Increased token limit
-                "--temp", "0.1",
-                "--ctx-size", "4096",  # Increased context size
-                "--top-p", "0.8",  # Added for better generation
-                "--top-k", "40",  # Added for better generation
-                "-p", query
+                "-n", "256",  # Increased token limit for multi-image
+                "--temp", str(self.temp),
+                "--ctx-size", "8192",  # Increased context for multi-image
+                "--top-p", str(self.top_p),
+                "--top-k", str(self.top_k)
             ]
+            
+            # Add system prompt if provided
+            if system_prompt:
+                cmd.extend(["--system", system_prompt])
+            
+            # Add images
+            for temp_path in temp_paths:
+                cmd.extend(["--image", os.path.abspath(temp_path)])
+            
+            # Add query
+            cmd.extend(["-p", query])
             
             # Run the command with retry mechanism
             max_retries = 3
@@ -130,7 +145,7 @@ class MiniCPMVProcessor:
                         cmd, 
                         capture_output=True, 
                         text=True, 
-                        timeout=45,  # Increased timeout
+                        timeout=60,  # Increased timeout for multi-image
                         cwd=os.getcwd()
                     )
                     
@@ -164,12 +179,17 @@ class MiniCPMVProcessor:
             return f"Error: {str(e)}"
             
         finally:
-            # Clean up temp file
-            try:
-                if temp_img_path and os.path.exists(temp_img_path):
-                    os.remove(temp_img_path)
-            except:
-                pass
+            # Clean up temp files
+            for temp_path in temp_paths:
+                try:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                except:
+                    pass
+    
+    def process_frame(self, frame: np.ndarray, query: str = "Describe this image briefly.") -> str:
+        """Process a single frame with MiniCPM-V (legacy method)"""
+        return self.process_frames([frame], query=query)
 
 # ------------------------------------------------------------------------------
 # BIOMECHANICAL ANALYSIS
@@ -431,29 +451,40 @@ class MovementAnalyzer:
 
 class VideoProcessor:
     """Process video files and extract frames"""
+    _instance = None  # Singleton instance
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(VideoProcessor, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
     def __init__(self):
+        if self._initialized:
+            return
+            
         self.frames = []
         self.frame_captions = []
-        
-        # Initialize MiniCPMV processor
-        try:
-            self.minicpmv_processor = MiniCPMVProcessor()
-            print("MiniCPMV processor initialized successfully")
-        except Exception as e:
-            print(f"Error initializing MiniCPMV processor: {str(e)}")
-            raise
+        self.processing_complete = False
         
         # Enhanced batch processing settings
-        self.batch_size = 8
-        self.max_retries = 1
-        self.frame_buffer = []
-        self.buffer_size = 16
-        self.executor = ThreadPoolExecutor(max_workers=4)
+        self.batch_size = 16  # Increased batch size
+        self.max_workers = min(32, (os.cpu_count() or 1) * 2)  # More workers
+        self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
         
         # Create temp directory
         self.temp_dir = os.path.join(os.getcwd(), 'temp_frames')
         if not os.path.exists(self.temp_dir):
             os.makedirs(self.temp_dir, exist_ok=True)
+            
+        # Initialize MiniCPMV processor
+        try:
+            self.minicpmv_processor = MiniCPMVProcessor()
+            print("MiniCPMV processor initialized successfully")
+            self._initialized = True
+        except Exception as e:
+            print(f"Error initializing MiniCPMV processor: {str(e)}")
+            raise
     
     def _get_temp_path(self, frame_idx: int, retry_count: int = 0) -> str:
         """Get path for temporary frame file"""
@@ -485,11 +516,59 @@ class VideoProcessor:
         except Exception as e:
             print(f"\rError in frame preprocessing: {str(e)}", flush=True)
             return None
+
+    def _process_frame_batch(self, frames_data):
+        """Process a batch of frames in parallel"""
+        try:
+            # Preprocess all frames in the batch
+            processed_frames = []
+            frame_indices = []
+            
+            for frame, frame_idx in frames_data:
+                frame_processed = self._preprocess_frame(frame)
+                if frame_processed is not None:
+                    processed_frames.append(frame_processed)
+                    frame_indices.append(frame_idx)
+            
+            if not processed_frames:
+                return []
+            
+            # Process the batch together
+            system_prompt = "You are analyzing a sequence of video frames. Describe each frame briefly and note any changes or movements."
+            captions = self.minicpmv_processor.process_frames(
+                processed_frames,
+                system_prompt=system_prompt,
+                query="Describe these frames in sequence, noting any changes or movements between them."
+            )
+            
+            # Split the caption into individual frame descriptions
+            try:
+                frame_captions = captions.split('\n')
+                # Ensure we have enough captions
+                while len(frame_captions) < len(processed_frames):
+                    frame_captions.append("No specific description available")
+                # Trim excess captions
+                frame_captions = frame_captions[:len(processed_frames)]
+            except:
+                # Fallback: use the same caption for all frames
+                frame_captions = [captions] * len(processed_frames)
+            
+            # Return results
+            return list(zip(processed_frames, frame_captions))
+            
+        except Exception as e:
+            print(f"\nError processing batch: {str(e)}")
+            return []
     
     def process_video(self, video_path: str, target_fps: int = 5) -> None:
         """Process video file and extract frames"""
         try:
             print("\nProcessing video frames...")
+            
+            # Reset state
+            self.frames = []
+            self.frame_captions = []
+            self.processing_complete = False
             
             # Open video file
             cap = cv2.VideoCapture(video_path)
@@ -505,66 +584,41 @@ class VideoProcessor:
             frame_indices = list(range(0, total_frames, sample_interval))
             total_frames_to_process = len(frame_indices)
             
-            # Initialize lists
-            self.frames = []
-            self.frame_captions = []
+            # Process frames in batches
+            frame_batches = []
+            current_batch = []
             
-            # Process frames
             for frame_idx in frame_indices:
-                try:
-                    # Read frame
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                    ret, frame = cap.read()
-                    if not ret:
-                        continue
-                    
-                    # Preprocess frame
-                    frame_processed = self._preprocess_frame(frame)
-                    if frame_processed is None:
-                        continue
-                    
-                    # Save frame to temp file
-                    temp_path = self._get_temp_path(frame_idx)
-                    success = cv2.imwrite(temp_path, cv2.cvtColor(frame_processed, cv2.COLOR_RGB2BGR),
-                                        [cv2.IMWRITE_JPEG_QUALITY, 95])
-                    
-                    if not success:
-                        print(f"✗ Failed to save frame to {temp_path}")
-                        continue
-                    
-                    # Process frame with MiniCPM-V
-                    frame_img = cv2.imread(temp_path)
-                    if frame_img is None:
-                        print(f"✗ Failed to read saved frame from {temp_path}")
-                        continue
-                    
-                    # Generate caption
-                    caption = self.minicpmv_processor.process_frame(
-                        frame_img,
-                        "Describe this image briefly."
-                    )
-                    
-                    # Store results if successful
-                    if caption and not caption.startswith("Error:"):
-                        print(f"\rProcessed frame {len(self.frames) + 1}/{total_frames_to_process} ✓", end="", flush=True)
-                        self.frames.append(frame_processed)
-                        self.frame_captions.append(caption)
-                    
-                    # Clean up temp file
-                    try:
-                        os.remove(temp_path)
-                    except:
-                        pass
-                        
-                except Exception as e:
-                    print(f"\nError processing frame {frame_idx}: {str(e)}")
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                ret, frame = cap.read()
+                if not ret:
                     continue
+                
+                current_batch.append((frame, frame_idx))
+                if len(current_batch) >= self.batch_size:
+                    frame_batches.append(current_batch)
+                    current_batch = []
+            
+            if current_batch:
+                frame_batches.append(current_batch)
+            
+            # Process batches in parallel
+            processed_frames = 0
+            for batch in frame_batches:
+                results = self._process_frame_batch(batch)
+                for frame, caption in results:
+                    self.frames.append(frame)
+                    self.frame_captions.append(caption)
+                    processed_frames += 1
+                    print(f"\rProcessed {processed_frames}/{total_frames_to_process} frames ✓", end="", flush=True)
             
             cap.release()
             print("\nVideo processing completed!")
             print(f"Total frames processed: {len(self.frames)}")
             print(f"Total captions generated: {len(self.frame_captions)}")
             print(f"Success rate: {(len(self.frame_captions) / total_frames_to_process) * 100:.1f}%")
+            
+            self.processing_complete = True
             
         except Exception as e:
             print(f"\nError processing video: {str(e)}")
@@ -597,18 +651,25 @@ def upload_video():
         video_file.save(video_path)
         
         try:
-            # Initialize video processing
-            video_processor = VideoProcessor()
+            # Initialize video processing if not already initialized
+            if video_processor is None:
+                video_processor = VideoProcessor()
+            
+            # Process video and wait for completion
             video_processor.process_video(video_path)
             
-            return jsonify({
-                'message': 'Video processed successfully',
-                'total_frames': len(video_processor.frames)
-            })
+            # Only return success if processing is complete
+            if video_processor.processing_complete:
+                return jsonify({
+                    'message': 'Video processed successfully',
+                    'total_frames': len(video_processor.frames)
+                })
+            else:
+                return jsonify({'error': 'Video processing incomplete'}), 500
             
         except Exception as e:
             logger.error(f"Error processing video: {str(e)}")
-            return jsonify({'error': 'Error processing video'}), 500
+            return jsonify({'error': str(e)}), 500
             
     except Exception as e:
         logger.error(f"Error in upload: {str(e)}")
