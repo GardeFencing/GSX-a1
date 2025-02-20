@@ -18,11 +18,13 @@ import asyncio
 import aiohttp
 import subprocess
 from pathlib import Path
+from werkzeug.utils import secure_filename
 
 # Import ML models
 from transformers import CLIPProcessor, CLIPModel
 from sentence_transformers import SentenceTransformer
 from pose_estimator import PoseEstimator, JointAngles
+from src.app.model import MiniCPMVProcessor
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -60,6 +62,9 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
 clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 sent_transformer = SentenceTransformer("all-MiniLM-L6-v2", device=device)
+
+# Initialize model
+model_processor = MiniCPMVProcessor()
 
 # ------------------------------------------------------------------------------
 # MINICPMV INTEGRATION
@@ -668,45 +673,40 @@ def index():
     return render_template('index.html')
 
 @app.route('/upload', methods=['POST'])
-def upload_video():
-    global video_processor
+def upload_file():
     try:
-        if 'video' not in request.files:
-            return jsonify({'error': 'No video file uploaded'}), 400
-            
-        video_file = request.files['video']
-        if video_file.filename == '':
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file part'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
             return jsonify({'error': 'No selected file'}), 400
             
-        # Save the uploaded file
-        video_path = os.path.join(app.config['UPLOAD_FOLDER'], video_file.filename)
-        video_file.save(video_path)
+        if file and allowed_file(file.filename):
+            # Save uploaded file
+            filename = secure_filename(file.filename)
+            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(filepath)
+            
+            # Process frames
+            frames = extract_frames(filepath)
+            if not frames:
+                return jsonify({'error': 'Failed to extract frames'}), 500
+                
+            # Generate caption
+            caption = model_processor.process_frames(frames)
+            if caption.startswith('Error:'):
+                return jsonify({'error': caption}), 500
+                
+            return jsonify({
+                'caption': caption,
+                'filename': filename
+            })
+            
+        return jsonify({'error': 'Invalid file type'}), 400
         
-        try:
-            # Initialize video processing if not already initialized
-            if video_processor is None or not video_processor._initialized:
-                print("Creating new VideoProcessor")
-                video_processor = VideoProcessor()
-            
-            # Process video and wait for completion
-            video_processor.process_video(video_path)
-            
-            # Only return success if processing is complete
-            if video_processor.processing_complete:
-                return jsonify({
-                    'message': 'Video processed successfully',
-                    'total_frames': len(video_processor.frames),
-                    'total_captions': len(video_processor.frame_captions)
-                })
-            else:
-                return jsonify({'error': 'Video processing incomplete'}), 500
-            
-        except Exception as e:
-            logger.error(f"Error processing video: {str(e)}")
-            return jsonify({'error': str(e)}), 500
-            
     except Exception as e:
-        logger.error(f"Error in upload: {str(e)}")
+        app.logger.error(f"Error in upload_file: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/chat', methods=['POST'])
