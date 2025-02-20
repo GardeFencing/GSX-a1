@@ -121,41 +121,21 @@
 
         function updateCaption() {
             const video = document.getElementById('videoPreview');
-            if (!video || !videoProcessed) {
-                console.log('Video not ready for caption update');
-                return;
-            }
+            if (!video || !videoProcessed) return;
 
             // Calculate current frame index based on video time
             const fps = 5; // Assuming 5 fps processing rate
             currentFrameIndex = Math.floor(video.currentTime * fps);
-            console.log('Updating caption for frame:', currentFrameIndex);
             
             // Get frame data
             fetch(`/get_frame/${currentFrameIndex}`)
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    return response.json();
-                })
+                .then(response => response.json())
                 .then(data => {
-                    console.log('Got frame data:', data);
-                    if (data.error) {
-                        console.error('Error fetching caption:', data.error);
-                        document.getElementById('currentCaption').textContent = 'Error loading caption';
-                    } else if (data.caption) {
+                    if (data.caption) {
                         document.getElementById('currentCaption').textContent = data.caption;
-                        // Store caption for chat context
-                        if (!frameCaptions[currentFrameIndex]) {
-                            frameCaptions[currentFrameIndex] = data.caption;
-                        }
                     }
                 })
-                .catch(error => {
-                    console.error('Error fetching caption:', error);
-                    document.getElementById('currentCaption').textContent = 'Error loading caption';
-                });
+                .catch(error => console.error('Error fetching caption:', error));
         }
 
         // Video upload and preview
@@ -178,9 +158,6 @@
             const progress = document.querySelector('.progress');
             const progressBar = progress.querySelector('.progress-bar');
             progress.style.display = 'flex';
-            
-            console.log('Uploading video...');
-            document.getElementById('currentCaption').textContent = 'Uploading and processing video...';
 
             fetch('/upload', {
                 method: 'POST',
@@ -188,23 +165,17 @@
             })
             .then(response => response.json())
             .then(data => {
-                console.log('Upload response:', data);
                 if (data.error) {
-                    videoProcessed = false;
                     addMessage('error', `Error: ${data.error}`);
-                    document.getElementById('currentCaption').textContent = 'Error processing video';
                 } else {
                     videoProcessed = true;
-                    addMessage('system', `Video processed successfully! ${data.total_frames} frames processed with ${data.total_captions} captions generated.`);
+                    addMessage('system', 'Video uploaded and processed successfully!');
                     // Get first frame caption
                     updateCaption();
                 }
             })
             .catch(error => {
-                console.error('Upload error:', error);
-                videoProcessed = false;
                 addMessage('error', `Error: ${error.message}`);
-                document.getElementById('currentCaption').textContent = 'Error uploading video';
             })
             .finally(() => {
                 progress.style.display = 'none';
@@ -241,7 +212,6 @@
                 max_tokens: parseInt(document.getElementById('maxTokens').value)
             };
 
-            console.log('Sending chat request:', params);
             fetch('/chat', {
                 method: 'POST',
                 headers: {
@@ -249,14 +219,8 @@
                 },
                 body: JSON.stringify(params)
             })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                return response.json();
-            })
+            .then(response => response.json())
             .then(data => {
-                console.log('Got chat response:', data);
                 if (data.error) {
                     addMessage('error', `Error: ${data.error}`);
                 } else {
@@ -264,7 +228,6 @@
                 }
             })
             .catch(error => {
-                console.error('Error in chat:', error);
                 addMessage('error', `Error: ${error.message}`);
             });
         }

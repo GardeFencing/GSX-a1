@@ -592,7 +592,7 @@ class VideoProcessor:
             results = list(zip(processed_frames, frame_captions))
             print(f"Returning {len(results)} frame-caption pairs")
             return results
-            
+                
         except Exception as e:
             print(f"\nError in _process_frame_batch: {str(e)}")
             return []
@@ -627,14 +627,14 @@ class VideoProcessor:
             
             for frame_idx in frame_indices:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                ret, frame = cap.read()
-                if not ret:
+                    ret, frame = cap.read()
+                    if not ret:
                     continue
                 
                 current_batch.append((frame, frame_idx))
                 if len(current_batch) >= self.batch_size:
                     frame_batches.append(current_batch)
-                    current_batch = []
+                                current_batch = []
             
             if current_batch:
                 frame_batches.append(current_batch)
@@ -677,7 +677,7 @@ def upload_file():
     try:
         if 'file' not in request.files:
             return jsonify({'error': 'No file part'}), 400
-        
+            
         file = request.files['file']
         if file.filename == '':
             return jsonify({'error': 'No selected file'}), 400
@@ -697,14 +697,14 @@ def upload_file():
             caption = model_processor.process_frames(frames)
             if caption.startswith('Error:'):
                 return jsonify({'error': caption}), 500
-                
+            
             return jsonify({
                 'caption': caption,
                 'filename': filename
             })
             
         return jsonify({'error': 'Invalid file type'}), 400
-        
+            
     except Exception as e:
         app.logger.error(f"Error in upload_file: {str(e)}")
         return jsonify({'error': str(e)}), 500
@@ -800,7 +800,7 @@ def chat():
         print(f"Generated response: {response[:200]}...")
         return jsonify({'response': response})
             
-    except Exception as e:
+                    except Exception as e:
         print(f"Error in chat: {str(e)}")
         logger.error(f"Error in chat: {str(e)}")
         return jsonify({'error': str(e)}), 500
