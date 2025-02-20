@@ -590,10 +590,10 @@ class VideoProcessor:
             
             for frame_idx in frame_indices:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                    ret, frame = cap.read()
-                    if not ret:
-                            continue
-                            
+                ret, frame = cap.read()
+                if not ret:
+                    continue
+                    
                 current_batch.append((frame, frame_idx))
                 if len(current_batch) >= self.batch_size:
                     frame_batches.append(current_batch)
@@ -653,17 +653,17 @@ def upload_video():
         try:
             # Initialize video processing if not already initialized
             if video_processor is None:
-            video_processor = VideoProcessor()
+                video_processor = VideoProcessor()
             
             # Process video and wait for completion
             video_processor.process_video(video_path)
             
             # Only return success if processing is complete
             if video_processor.processing_complete:
-            return jsonify({
-                'message': 'Video processed successfully',
-                'total_frames': len(video_processor.frames)
-            })
+                return jsonify({
+                    'message': 'Video processed successfully',
+                    'total_frames': len(video_processor.frames)
+                })
             else:
                 return jsonify({'error': 'Video processing incomplete'}), 500
             
