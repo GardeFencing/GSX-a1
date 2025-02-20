@@ -14,11 +14,12 @@ echo "Installing system dependencies..."
 sudo apt-get install -y \
     python3-pip \
     python3-dev \
+    python3-venv \
+    python3-full \
     build-essential \
     libssl-dev \
     libffi-dev \
     python3-setuptools \
-    python3-venv \
     nginx \
     supervisor \
     cmake \
@@ -26,16 +27,26 @@ sudo apt-get install -y \
     protobuf-compiler \
     libprotobuf-dev
 
+# Deactivate any existing virtual environment
+deactivate 2>/dev/null || true
+
+# Remove existing virtual environment if it exists
+echo "Setting up fresh virtual environment..."
+rm -rf venv
+
 # Create and activate virtual environment
-echo "Setting up Python virtual environment..."
 python3 -m venv venv
 source venv/bin/activate
 
+# Verify we're in the virtual environment
+which python3
+which pip
+
 # Install Python dependencies
 echo "Installing Python packages..."
-pip install --upgrade pip
-pip install wheel setuptools
-pip install --no-cache-dir -r requirements.txt
+python3 -m pip install --upgrade pip
+python3 -m pip install --no-cache-dir wheel setuptools
+python3 -m pip install --no-cache-dir -r requirements.txt
 
 # Create necessary directories with proper permissions
 echo "Setting up directories..."
