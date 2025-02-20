@@ -526,7 +526,6 @@ class VideoProcessor:
             
             print(f"Will process {len(frame_indices)} frames")
             processed_frames = []
-            processed_captions = []
             
             # First pass: extract all frames
             for i, frame_idx in enumerate(frame_indices):
@@ -554,11 +553,13 @@ class VideoProcessor:
             print(f"\nExtracted {len(processed_frames)} frames")
             
             # Second pass: process frames in small batches
-            try:
-                for i in range(0, len(processed_frames), 2):  # Process 2 frames at a time
-                    batch_frames = processed_frames[i:i+2]
-                    batch_paths = []
-                    
+            processed_captions = []
+            
+            for i in range(0, len(processed_frames), 2):
+                batch_frames = processed_frames[i:i+2]
+                batch_paths = []
+                
+                try:
                     # Save frames as temporary images
                     for j, frame in enumerate(batch_frames):
                         temp_path = os.path.join(self.temp_dir, f"frame_{i+j}_{int(time.time())}.jpg")
@@ -617,6 +618,16 @@ class VideoProcessor:
                     processed_captions.extend([response] * len(batch_frames))
                     print(f"Successfully processed batch")
                     
+                except subprocess.TimeoutExpired as e:
+                    print(f"Batch processing timeout: {str(e)}")
+                    processed_captions.extend(["Failed to process frame"] * len(batch_frames))
+                except subprocess.CalledProcessError as e:
+                    print(f"Batch processing error: {str(e)}")
+                    processed_captions.extend(["Failed to process frame"] * len(batch_frames))
+                except Exception as e:
+                    print(f"Unexpected error in batch: {str(e)}")
+                    processed_captions.extend(["Failed to process frame"] * len(batch_frames))
+                finally:
                     # Clean up batch files
                     for path in batch_paths:
                         try:
@@ -626,27 +637,16 @@ class VideoProcessor:
                                 print(f"Cleaned up {path}")
                         except Exception as e:
                             print(f"Failed to clean up {path}: {str(e)}")
-                
-                # Store results
-                self.frames = processed_frames
-                self.frame_captions = processed_captions
-                self.processing_complete = True
-                
-                print(f"\nVideo processing completed successfully!")
-                print(f"Total frames processed: {len(self.frames)}")
-                print(f"Total captions generated: {len(self.frame_captions)}")
-                
-            except subprocess.TimeoutExpired as e:
-                print(f"Command timed out after {e.timeout} seconds")
-                raise
-            except subprocess.CalledProcessError as e:
-                print(f"Command failed with return code {e.returncode}")
-                print(f"Error output: {e.stderr}")
-                raise
-            except Exception as e:
-                print(f"Error processing frames: {str(e)}")
-                raise
-                
+            
+            # Store results
+            self.frames = processed_frames
+            self.frame_captions = processed_captions
+            self.processing_complete = True
+            
+            print(f"\nVideo processing completed successfully!")
+            print(f"Total frames processed: {len(self.frames)}")
+            print(f"Total captions generated: {len(self.frame_captions)}")
+            
         except Exception as e:
             print(f"\nError in process_video: {str(e)}")
             self.processing_complete = False
@@ -733,7 +733,7 @@ def chat():
         
         # Ensure current_frame is within bounds
         if current_frame >= len(video_processor.frames):
-            current_frame = len(video_processor.frames) - 1
+            return jsonify({'error': 'Invalid frame index'}), 400
             
         # Get current frame
         frame = video_processor.frames[current_frame]
@@ -761,14 +761,15 @@ def chat():
                 "-p", query
             ]
             
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-            
-            if result.returncode == 0 and result.stdout:
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    check=True
+                )
+                
                 # Clean up the response
                 response = ' '.join(
                     line.strip() for line in result.stdout.split('\n')
@@ -777,23 +778,32 @@ def chat():
                               ['loading', 'llama_print', 'log start', 'clip_model',
                                'user:', 'assistant:', '<user>', '<assistant>'])
                 )
+                
+                if not response:
+                    return jsonify({'error': 'No response generated'}), 500
+                    
                 return jsonify({'response': response})
-            else:
-                print(f"Command failed with code {result.returncode}: {result.stderr}")
+                
+            except subprocess.TimeoutExpired:
+                return jsonify({'error': 'Request timed out'}), 504
+            except subprocess.CalledProcessError as e:
+                print(f"Command failed: {e.stderr}")
                 return jsonify({'error': 'Failed to generate response'}), 500
+            except Exception as e:
+                print(f"Unexpected error: {str(e)}")
+                return jsonify({'error': 'Internal server error'}), 500
                 
         finally:
             # Clean up temp file
             try:
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
-            except:
-                pass
+            except Exception as e:
+                print(f"Failed to clean up temp file: {str(e)}")
             
     except Exception as e:
         print(f"Error in chat: {str(e)}")
-        logger.error(f"Error in chat: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/get_frame/<int:frame_idx>')
 def get_frame(frame_idx):
