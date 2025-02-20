@@ -564,16 +564,16 @@ class VideoProcessor:
                         self.frame_captions.append("Failed to save frame")
                         continue
                     
-                    # Construct command for single frame
+                    # Construct command for single frame - using working parameters
                     cmd = [
                         self.cli_path,
                         "-m", self.model_path,
                         "--mmproj", self.mmproj_path,
                         "-t", "4",
-                        "-n", "512",  # Increased from 256
+                        "-n", "512",
                         "--temp", "0.1",
                         "--ctx-size", "2048",
-                        "--repeat-penalty", "1.1",  # Added repeat penalty
+                        "--repeat-penalty", "1.1",
                         "--top-p", "0.7",
                         "--top-k", "40",
                         "--image", temp_path,
@@ -731,9 +731,10 @@ def chat():
                 "-m", video_processor.model_path,
                 "--mmproj", video_processor.mmproj_path,
                 "-t", "4",
-                "-n", "256",
+                "-n", "512",
                 "--temp", "0.1",
-                "--ctx-size", "8192",
+                "--ctx-size", "2048",
+                "--repeat-penalty", "1.1",
                 "--top-p", "0.7",
                 "--top-k", "40",
                 "--image", temp_path,
@@ -745,7 +746,7 @@ def chat():
                     cmd,
                     capture_output=True,
                     text=True,
-                    timeout=60,
+                    timeout=120,
                     check=True
                 )
                 
