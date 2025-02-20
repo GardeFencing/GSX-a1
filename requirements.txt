@@ -8,10 +8,12 @@ python-dotenv==1.0.1
 numpy==1.26.4
 Pillow==10.1.0
 opencv-python-headless==4.9.0.80
-torch>=2.2.0
-torchvision>=0.17.0
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.0+cpu
+torchvision==0.17.0+cpu
 transformers==4.40.2
-sentencepiece==0.1.99
+protobuf==3.20.0
+sentencepiece==0.1.97  # Using older stable version
 
 # Monitoring and logging
 prometheus_client==0.20.0
