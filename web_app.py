@@ -596,7 +596,7 @@ class VideoProcessor:
             print(f"\nError processing batch: {str(e)}")
             return []
     
-    def process_video(self, video_path: str, target_fps: int = 5) -> None:
+    def process_video(self, video_path: str, target_fps: int = 1) -> None:
         """Process video file and extract frames"""
         try:
             print("\nProcessing video frames...")
@@ -612,41 +612,97 @@ class VideoProcessor:
                 raise ValueError("Failed to open video file")
             
             # Get video properties
-            orig_fps = cap.get(cv2.CAP_PROP_FPS)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
             
-            # Calculate frame sampling interval
-            sample_interval = max(1, int(orig_fps / target_fps))
+            # Calculate frame sampling interval (1 frame per second)
+            sample_interval = max(1, int(fps))
             frame_indices = list(range(0, total_frames, sample_interval))
+            
+            # Uniformly sample frames if too many
+            if len(frame_indices) > 32:  # Max frames to process
+                gap = len(frame_indices) / 32
+                frame_indices = [frame_indices[int(i * gap + gap / 2)] for i in range(32)]
+            
             total_frames_to_process = len(frame_indices)
+            processed_frames = []
             
-            # Process frames in batches
-            frame_batches = []
-            current_batch = []
-            
+            # Extract frames
             for frame_idx in frame_indices:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
                 ret, frame = cap.read()
                 if not ret:
                     continue
+                
+                # Convert BGR to RGB and resize
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frame_resized = cv2.resize(frame_rgb, (448, 448))
+                processed_frames.append(frame_resized)
+            
+            # Save all frames as temporary images
+            temp_paths = []
+            for i, frame in enumerate(processed_frames):
+                temp_path = os.path.join(self.temp_dir, f"frame_{int(time.time())}_{i}.jpg")
+                success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+                if success:
+                    temp_paths.append(temp_path)
+            
+            try:
+                # Process all frames at once
+                cmd = [
+                    self.minicpmv_processor.cli_path,
+                    "-m", self.minicpmv_processor.model_path,
+                    "--mmproj", self.minicpmv_processor.mmproj_path,
+                    "-t", "4",
+                    "-n", "256",
+                    "--temp", "0.1",
+                    "--ctx-size", "8192",
+                    "--top-p", "0.7",
+                    "--top-k", "40"
+                ]
+                
+                # Add all images
+                for temp_path in temp_paths:
+                    cmd.extend(["--image", temp_path])
+                
+                # Add query
+                cmd.extend(["-p", "Describe what is happening in these frames."])
+                
+                # Run command
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=180,  # Increased timeout for multiple frames
+                    cwd='/home/ubuntu/GSX-a1'
+                )
+                
+                if result.returncode == 0 and result.stdout:
+                    # Clean up the response
+                    response = ' '.join(
+                        line.strip() for line in result.stdout.split('\n')
+                        if line.strip()
+                        and not any(x in line.lower() for x in
+                                  ['loading', 'llama_print', 'log start', 'clip_model',
+                                   'user:', 'assistant:', '<user>', '<assistant>'])
+                    )
                     
-                current_batch.append((frame, frame_idx))
-                if len(current_batch) >= self.batch_size:
-                    frame_batches.append(current_batch)
-                    current_batch = []
-            
-            if current_batch:
-                frame_batches.append(current_batch)
-            
-            # Process batches in parallel
-            processed_frames = 0
-            for batch in frame_batches:
-                results = self._process_frame_batch(batch)
-                for frame, caption in results:
-                    self.frames.append(frame)
-                    self.frame_captions.append(caption)
-                    processed_frames += 1
-                    print(f"\rProcessed {processed_frames}/{total_frames_to_process} frames ✓", end="", flush=True)
+                    # Store processed frames and caption
+                    self.frames = processed_frames
+                    self.frame_captions = [response] * len(processed_frames)
+                    print(f"\rProcessed {len(processed_frames)}/{total_frames_to_process} frames ✓")
+                    
+                else:
+                    raise ValueError(f"Command failed with code {result.returncode}: {result.stderr}")
+                
+            finally:
+                # Clean up temp files
+                for temp_path in temp_paths:
+                    try:
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+                    except:
+                        pass
             
             cap.release()
             print("\nVideo processing completed!")
