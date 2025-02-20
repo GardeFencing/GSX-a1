@@ -494,9 +494,8 @@ class VideoProcessor:
         
         self._initialized = True
     
-    def process_video(self, video_path: str, target_fps: int = 1) -> None:
-        """Process video file and extract frames"""
-        temp_paths = []
+    def process_video(self, video_path: str) -> None:
+        """Process video file and extract frames using VidiQA's approach"""
         try:
             print("\nProcessing video frames...")
             
@@ -512,29 +511,25 @@ class VideoProcessor:
             
             # Get video properties
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            fps = cap.get(cv2.CAP_PROP_FPS)
+            fps = int(cap.get(cv2.CAP_PROP_FPS))
             print(f"Video properties: {total_frames} frames, {fps} fps")
             
-            # Calculate frame sampling interval (1 frame per second)
-            sample_interval = max(1, int(fps))
+            # Calculate frame sampling interval (1/2 fps like VidiQA)
+            sample_interval = max(1, fps // 2)  # Sample at 1/2 fps
             frame_indices = list(range(0, total_frames, sample_interval))
             
-            # Uniformly sample frames if too many
-            if len(frame_indices) > 6:
-                gap = len(frame_indices) / 6
-                frame_indices = [frame_indices[int(i * gap + gap / 2)] for i in range(6)]
+            # Uniformly sample frames if too many (VidiQA's approach)
+            if len(frame_indices) > 15:  # Using 15 as max frames
+                gap = len(frame_indices) / 15
+                frame_indices = [int(i * gap + gap / 2) for i in range(15)]
             
             print(f"Will process {len(frame_indices)} frames")
             processed_frames = []
             
-            # First pass: extract all frames
-            for i, frame_idx in enumerate(frame_indices):
-                print(f"\nExtracting frame {i+1}/{len(frame_indices)} (frame index: {frame_idx})")
-                
-                # Set frame position and read frame
+            # Extract frames (VidiQA's approach)
+            for frame_idx in frame_indices:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
                 ret, frame = cap.read()
-                
                 if not ret:
                     print(f"Failed to read frame {frame_idx}")
                     continue
@@ -543,8 +538,8 @@ class VideoProcessor:
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 frame_resized = cv2.resize(frame_rgb, (448, 448))
                 processed_frames.append(frame_resized)
+                print(f"Extracted frame {len(processed_frames)}/{len(frame_indices)}")
             
-            # Release video capture
             cap.release()
             
             if not processed_frames:
@@ -552,37 +547,33 @@ class VideoProcessor:
             
             print(f"\nExtracted {len(processed_frames)} frames")
             
-            # Second pass: process frames in small batches
+            # Process frames in batches of 3 for efficiency
             processed_captions = []
             
-            for i in range(0, len(processed_frames), 2):
-                batch_frames = processed_frames[i:i+2]
-                batch_paths = []
+            for i in range(0, len(processed_frames), 3):
+                batch_frames = processed_frames[i:i+3]
+                temp_paths = []
                 
                 try:
-                    # Save frames as temporary images
+                    # Save batch frames as temporary images
                     for j, frame in enumerate(batch_frames):
                         temp_path = os.path.join(self.temp_dir, f"frame_{i+j}_{int(time.time())}.jpg")
-                        print(f"Saving frame to {temp_path}")
-                        
                         success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
                         if not success:
                             print(f"Failed to save frame {i+j}")
                             continue
-                            
-                        batch_paths.append(temp_path)
                         temp_paths.append(temp_path)
                     
-                    if not batch_paths:
+                    if not temp_paths:
                         continue
                     
-                    # Process batch
+                    # Process batch with optimized parameters
                     cmd = [
                         self.cli_path,
                         "-m", self.model_path,
                         "--mmproj", self.mmproj_path,
-                        "-t", "4",
-                        "-n", "256",
+                        "-t", str(max(1, os.cpu_count() // 2)),  # Optimal thread count
+                        "-n", "512",
                         "--temp", "0.1",
                         "--ctx-size", "8192",
                         "--top-p", "0.7",
@@ -590,7 +581,7 @@ class VideoProcessor:
                     ]
                     
                     # Add images from batch
-                    for path in batch_paths:
+                    for path in temp_paths:
                         cmd.extend(["--image", path])
                     
                     # Add prompt
@@ -601,7 +592,7 @@ class VideoProcessor:
                         cmd,
                         capture_output=True,
                         text=True,
-                        timeout=90,  # 90 seconds for batch
+                        timeout=180,
                         check=True
                     )
                     
@@ -628,12 +619,11 @@ class VideoProcessor:
                     print(f"Unexpected error in batch: {str(e)}")
                     processed_captions.extend(["Failed to process frame"] * len(batch_frames))
                 finally:
-                    # Clean up batch files
-                    for path in batch_paths:
+                    # Clean up temp files immediately after use
+                    for path in temp_paths:
                         try:
                             if os.path.exists(path):
                                 os.remove(path)
-                                temp_paths.remove(path)
                                 print(f"Cleaned up {path}")
                         except Exception as e:
                             print(f"Failed to clean up {path}: {str(e)}")
@@ -651,16 +641,6 @@ class VideoProcessor:
             print(f"\nError in process_video: {str(e)}")
             self.processing_complete = False
             raise
-            
-        finally:
-            # Clean up any remaining temp files
-            for temp_path in temp_paths:
-                try:
-                    if os.path.exists(temp_path):
-                        os.remove(temp_path)
-                        print(f"Cleaned up {temp_path}")
-                except Exception as e:
-                    print(f"Failed to clean up {temp_path}: {str(e)}")
 
 # ------------------------------------------------------------------------------
 # ROUTES
