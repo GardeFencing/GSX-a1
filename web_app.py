@@ -518,10 +518,10 @@ class VideoProcessor:
             sample_interval = max(1, int(fps))
             frame_indices = list(range(0, total_frames, sample_interval))
             
-            # Limit to 32 frames maximum
-            if len(frame_indices) > 32:
-                gap = len(frame_indices) / 32
-                frame_indices = [frame_indices[int(i * gap + gap / 2)] for i in range(32)]
+            # Limit to 4 frames for stability
+            if len(frame_indices) > 4:
+                gap = len(frame_indices) / 4
+                frame_indices = [frame_indices[int(i * gap + gap / 2)] for i in range(4)]
             
             print(f"Will process {len(frame_indices)} frames")
             processed_frames = []
@@ -540,17 +540,13 @@ class VideoProcessor:
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 frame_resized = cv2.resize(frame_rgb, (448, 448))
                 
-                # Save frame as temporary image
-                temp_path = os.path.join(self.temp_dir, f"frame_{int(time.time() * 1000)}.jpg")
+                # Save frame as temporary image with unique name
+                temp_path = os.path.join(self.temp_dir, f"frame_{frame_idx}_{int(time.time())}.jpg")
                 print(f"Saving frame to {temp_path}")
-                success = cv2.imwrite(temp_path, cv2.cvtColor(frame_resized, cv2.COLOR_RGB2BGR))
-                
-                if not success:
-                    print(f"Failed to save frame to {temp_path}")
-                    continue
+                cv2.imwrite(temp_path, cv2.cvtColor(frame_resized, cv2.COLOR_RGB2BGR))
                 
                 try:
-                    # Use exact working command format
+                    # Use simpler command format
                     cmd = [
                         self.cli_path,
                         "-m", self.model_path,
@@ -558,11 +554,11 @@ class VideoProcessor:
                         "-t", "4",
                         "-n", "256",
                         "--temp", "0.1",
-                        "--ctx-size", "8192",
+                        "--ctx-size", "2048",  # Reduced context size
                         "--top-p", "0.7",
                         "--top-k", "40",
                         "--image", temp_path,
-                        "-p", "What's happening in this frame?"
+                        "-p", "Describe what is happening in this frame."
                     ]
                     
                     print(f"Running command: {' '.join(cmd)}")
@@ -570,7 +566,7 @@ class VideoProcessor:
                         cmd,
                         capture_output=True,
                         text=True,
-                        timeout=180  # Increased timeout
+                        timeout=60  # 60 second timeout
                     )
                     
                     if result.returncode == 0 and result.stdout:
@@ -586,9 +582,6 @@ class VideoProcessor:
                         processed_frames.append(frame_resized)
                         processed_captions.append(response)
                         print(f"Successfully processed frame {i+1}/{len(frame_indices)}")
-                    else:
-                        print(f"Command failed with code {result.returncode}")
-                        print(f"Error output: {result.stderr}")
                         
                 except subprocess.TimeoutExpired:
                     print(f"Timeout processing frame {i+1}/{len(frame_indices)}")
