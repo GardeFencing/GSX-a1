@@ -67,11 +67,14 @@ sent_transformer = SentenceTransformer("all-MiniLM-L6-v2", device=device)
 
 class MiniCPMVProcessor:
     """Handle MiniCPM-V model integration for video captioning and chat"""
-    def __init__(self, model_path: str = "MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf",
-                 mmproj_path: str = "MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf"):
-        self.model_path = model_path
-        self.mmproj_path = mmproj_path
-        self.cli_path = "/home/ubuntu/GSX-a1/llama.cpp/build/bin/llama-minicpmv-cli"
+    def __init__(self):
+        # Get absolute paths
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        model_dir = os.path.join(base_dir, "MiniCPM-V-2_6-gguf")
+        
+        self.model_path = os.path.join(model_dir, "ggml-model-Q4_K_M.gguf")
+        self.mmproj_path = os.path.join(model_dir, "mmproj-model-f16.gguf")
+        self.cli_path = os.path.join(base_dir, "llama.cpp/build/bin/llama-minicpmv-cli")
         
         # Optimized parameters
         self.temp = 0.1
@@ -87,12 +90,16 @@ class MiniCPMVProcessor:
             os.makedirs(self.temp_dir, exist_ok=True)
         
         # Ensure model files exist
-        if not os.path.exists(model_path):
-            raise ValueError(f"Model file not found: {model_path}")
-        if not os.path.exists(mmproj_path):
-            raise ValueError(f"MMPROJ file not found: {mmproj_path}")
+        if not os.path.exists(self.model_path):
+            raise ValueError(f"Model file not found: {self.model_path}")
+        if not os.path.exists(self.mmproj_path):
+            raise ValueError(f"MMPROJ file not found: {self.mmproj_path}")
         if not os.path.exists(self.cli_path):
             raise ValueError(f"CLI executable not found: {self.cli_path}")
+            
+        print(f"Model path: {self.model_path}")
+        print(f"MMPROJ path: {self.mmproj_path}")
+        print(f"CLI path: {self.cli_path}")
     
     def process_frames(self, frames: List[np.ndarray], system_prompt: str = None, query: str = "Describe these frames in detail.") -> str:
         """Process multiple frames with MiniCPM-V"""
