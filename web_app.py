@@ -530,66 +530,42 @@ class VideoProcessor:
     def _process_frame_batch(self, frames_data):
         """Process a batch of frames in parallel"""
         try:
-            # Preprocess all frames in the batch
+            # Process one frame at a time using the working command format
             processed_frames = []
             frame_indices = []
             
             for frame, frame_idx in frames_data:
                 frame_processed = self._preprocess_frame(frame)
                 if frame_processed is not None:
-                    processed_frames.append(frame_processed)
-                    frame_indices.append(frame_idx)
-            
-            if not processed_frames:
-                return []
-            
-            # Save frames as temporary images
-            temp_paths = []
-            for i, frame in enumerate(processed_frames):
-                temp_path = os.path.join(self.temp_dir, f"temp_frame_{int(time.time() * 1000)}_{i}.jpg")
-                success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
-                                    [cv2.IMWRITE_JPEG_QUALITY, 95])
-                if success:
-                    temp_paths.append(temp_path)
-            
-            if not temp_paths:
-                return []
-            
-            try:
-                # Process frames with retries
-                max_retries = 3
-                retry_count = 0
-                timeout = 180  # Increased timeout
-                
-                while retry_count < max_retries:
+                    # Save frame as temporary image
+                    temp_path = os.path.join(self.temp_dir, f"temp_frame_{int(time.time() * 1000)}.jpg")
+                    success = cv2.imwrite(temp_path, cv2.cvtColor(frame_processed, cv2.COLOR_RGB2BGR),
+                                        [cv2.IMWRITE_JPEG_QUALITY, 95])
+                    
+                    if not success:
+                        continue
+                    
                     try:
-                        # Construct command using the working format
+                        # Use exact working command format
                         cmd = [
                             self.minicpmv_processor.cli_path,
                             "-m", self.minicpmv_processor.model_path,
                             "--mmproj", self.minicpmv_processor.mmproj_path,
-                            "-t", "4",  # Use 4 threads
-                            "-n", "512",  # Increased token limit
-                            "--temp", "0.2",  # Adjusted temperature
-                            "--ctx-size", "2048",  # Reduced context size
-                            "--top-p", "0.8",
+                            "-t", "4",
+                            "-n", "256",
+                            "--temp", "0.1",
+                            "--ctx-size", "8192",
+                            "--top-p", "0.7",
                             "--top-k", "40",
-                            "--repeat-penalty", "1.1",
-                            "--image"
+                            "--image", temp_path,
+                            "-p", "What's in this image?"
                         ]
                         
-                        # Add only one image at a time
-                        cmd.append(temp_paths[0])  # Process first image
-                        
-                        # Add query
-                        cmd.extend(["-p", "Describe what is happening in this image."])
-                        
-                        # Run command with increased timeout
                         result = subprocess.run(
                             cmd,
                             capture_output=True,
                             text=True,
-                            timeout=timeout,
+                            timeout=60,
                             cwd='/home/ubuntu/GSX-a1'
                         )
                         
@@ -603,38 +579,19 @@ class VideoProcessor:
                                            'user:', 'assistant:', '<user>', '<assistant>'])
                             )
                             
-                            # Return the processed frame and its caption
-                            return [(processed_frames[0], response)]
+                            processed_frames.append((frame_processed, response))
+                            frame_indices.append(frame_idx)
                             
-                        retry_count += 1
-                        if retry_count < max_retries:
-                            print(f"\nRetrying batch (attempt {retry_count + 1}/{max_retries})...")
-                            time.sleep(2)  # Wait before retrying
-                            continue
-                        else:
-                            print(f"\nFailed to process batch after {max_retries} attempts")
-                            return []
-                            
-                    except subprocess.TimeoutExpired:
-                        retry_count += 1
-                        if retry_count < max_retries:
-                            print(f"\nTimeout - Retrying batch (attempt {retry_count + 1}/{max_retries})...")
-                            timeout += 30  # Increase timeout for next attempt
-                            time.sleep(2)  # Wait before retrying
-                            continue
-                        else:
-                            print(f"\nBatch processing timed out after {max_retries} attempts")
-                            return []
-                            
-            finally:
-                # Clean up temp files
-                for temp_path in temp_paths:
-                    try:
-                        if os.path.exists(temp_path):
-                            os.remove(temp_path)
-                    except:
-                        pass
-                
+                    finally:
+                        # Clean up temp file
+                        try:
+                            if os.path.exists(temp_path):
+                                os.remove(temp_path)
+                        except:
+                            pass
+            
+            return processed_frames
+            
         except Exception as e:
             print(f"\nError processing batch: {str(e)}")
             return []
@@ -790,28 +747,26 @@ def chat():
             if not success:
                 return jsonify({'error': 'Failed to save frame'}), 500
             
-            # Construct command using working format
+            # Use exact working command format
             cmd = [
                 video_processor.minicpmv_processor.cli_path,
                 "-m", video_processor.minicpmv_processor.model_path,
                 "--mmproj", video_processor.minicpmv_processor.mmproj_path,
-                "-t", "4",  # Use 4 threads
-                "-n", "512",  # Increased token limit
-                "--temp", "0.2",  # Adjusted temperature
-                "--ctx-size", "2048",  # Reduced context size
-                "--top-p", "0.8",
+                "-t", "4",
+                "-n", "256",
+                "--temp", "0.1",
+                "--ctx-size", "8192",
+                "--top-p", "0.7",
                 "--top-k", "40",
-                "--repeat-penalty", "1.1",
                 "--image", temp_path,
                 "-p", query
             ]
             
-            # Run command with increased timeout
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=180,
+                timeout=60,
                 cwd='/home/ubuntu/GSX-a1'
             )
             
