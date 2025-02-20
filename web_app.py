@@ -457,7 +457,7 @@ class MovementAnalyzer:
 # ------------------------------------------------------------------------------
 
 class VideoProcessor:
-    """Process video files and extract frames"""
+    """Process video files and extract frames using VidiQA's approach"""
     _instance = None  # Singleton instance
     
     def __new__(cls):
@@ -487,7 +487,7 @@ class VideoProcessor:
         self._initialized = True
     
     def process_video(self, video_path: str) -> None:
-        """Process video file and extract frames"""
+        """Process video file and extract frames using VidiQA's approach"""
         try:
             print("\n" + "="*50)
             print("Starting video processing...")
@@ -520,17 +520,19 @@ class VideoProcessor:
             print(f"- Total frames: {total_frames}")
             print(f"- FPS: {fps}")
             
-            # Calculate frame interval (1 frame per second)
-            frame_interval = fps  # 1 frame per second
-            frame_indices = list(range(0, total_frames, frame_interval))
+            # Calculate frame sampling interval (1 frame per second)
+            sample_interval = max(1, fps)
+            frame_indices = list(range(0, total_frames, sample_interval))
             
-            # Limit to 15 frames
-            if len(frame_indices) > 15:
-                frame_indices = frame_indices[:15]
+            # Uniformly sample frames if too many
+            MAX_FRAMES = 15  # Limit to 15 frames
+            if len(frame_indices) > MAX_FRAMES:
+                gap = len(frame_indices) / MAX_FRAMES
+                frame_indices = [int(i * gap + gap / 2) for i in range(MAX_FRAMES)]
             
             print(f"\nFrame extraction plan:")
-            print(f"- Frame interval: {frame_interval}")
-            print(f"- Expected frames: {len(frame_indices)}")
+            print(f"- Frame interval: {sample_interval}")
+            print(f"- Selected frames: {len(frame_indices)}")
             
             # Extract frames
             print("\nExtracting frames...")
@@ -568,9 +570,10 @@ class VideoProcessor:
                         "-m", self.model_path,
                         "--mmproj", self.mmproj_path,
                         "-t", "4",
-                        "-n", "256",
+                        "-n", "512",  # Increased from 256
                         "--temp", "0.1",
                         "--ctx-size", "2048",
+                        "--repeat-penalty", "1.1",  # Added repeat penalty
                         "--top-p", "0.7",
                         "--top-k", "40",
                         "--image", temp_path,
@@ -579,12 +582,12 @@ class VideoProcessor:
                     
                     print("Running command:", " ".join(cmd))
                     
-                    # Run command with timeout
+                    # Run command with increased timeout
                     result = subprocess.run(
                         cmd,
                         capture_output=True,
                         text=True,
-                        timeout=60,
+                        timeout=120,  # Increased from 60 to 120 seconds
                         check=True
                     )
                     
