@@ -16,6 +16,8 @@ from tqdm import tqdm
 import time
 import asyncio
 import aiohttp
+import subprocess
+from pathlib import Path
 
 # Import ML models
 from transformers import CLIPProcessor, CLIPModel
@@ -27,8 +29,27 @@ app.config['UPLOAD_FOLDER'] = 'uploads'
 video_processor = None  # Global VideoProcessor instance
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.WARNING,  # Change to WARNING to suppress most logs
+    format='%(message)s',  # Simplified format
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
+
+# Suppress verbose logs from other modules
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+logging.getLogger("clip_model").setLevel(logging.ERROR)
+logging.getLogger("llama_model").setLevel(logging.ERROR)
+logging.getLogger("werkzeug").setLevel(logging.ERROR)  # Suppress Flask logs
+logging.getLogger("PIL").setLevel(logging.ERROR)  # Suppress PIL logs
+logging.getLogger("tqdm").setLevel(logging.ERROR)  # Suppress tqdm logs
+logging.getLogger("absl").setLevel(logging.ERROR)  # Suppress TensorFlow logs
+
+# Disable TensorFlow logging
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logging
 
 # Ensure upload folder exists
 if not os.path.exists(app.config['UPLOAD_FOLDER']):
@@ -39,6 +60,116 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
 clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 sent_transformer = SentenceTransformer("all-MiniLM-L6-v2", device=device)
+
+# ------------------------------------------------------------------------------
+# MINICPMV INTEGRATION
+# ------------------------------------------------------------------------------
+
+class MiniCPMVProcessor:
+    """Handle MiniCPM-V model integration for video captioning and chat"""
+    def __init__(self, model_path: str = "MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf",
+                 mmproj_path: str = "MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf"):
+        self.model_path = model_path
+        self.mmproj_path = mmproj_path
+        self.cli_path = "./llama.cpp/llama-minicpmv-cli"
+        
+        # Optimized parameters for Mac CPU
+        self.temp = 0.1
+        self.top_p = 0.7
+        self.top_k = 40
+        self.repeat_penalty = 1.1
+        self.context_size = 2048
+        self.n_threads = max(1, os.cpu_count() // 2)
+        
+        # Create temp directory
+        self.temp_dir = os.path.join(os.getcwd(), 'temp_frames')
+        if not os.path.exists(self.temp_dir):
+            os.makedirs(self.temp_dir, exist_ok=True)
+        
+        # Ensure model files exist
+        if not os.path.exists(model_path):
+            raise ValueError(f"Model file not found: {model_path}")
+        if not os.path.exists(mmproj_path):
+            raise ValueError(f"MMPROJ file not found: {mmproj_path}")
+        if not os.path.exists(self.cli_path):
+            raise ValueError(f"CLI executable not found: {self.cli_path}")
+    
+    def process_frame(self, frame: np.ndarray, query: str = "What specific fencing position or technique is being demonstrated in this image? Focus on the stance, blade position, and body alignment.") -> str:
+        """Process a single frame with MiniCPM-V"""
+        temp_img_path = None
+        try:
+            # Save frame as temporary image with unique timestamp
+            temp_img_path = os.path.join(self.temp_dir, f"temp_frame_{int(time.time() * 1000)}.jpg")
+            success = cv2.imwrite(temp_img_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR), 
+                                [cv2.IMWRITE_JPEG_QUALITY, 95])
+            
+            if not success or not os.path.exists(temp_img_path):
+                return "Error: Failed to save frame"
+            
+            # Construct command with minimal arguments and increased context size
+            cmd = [
+                self.cli_path,
+                "-m", os.path.abspath(self.model_path),
+                "--mmproj", os.path.abspath(self.mmproj_path),
+                "--image", os.path.abspath(temp_img_path),
+                "-t", str(self.n_threads),
+                "-n", "96",  # Increased token limit
+                "--temp", "0.1",
+                "--ctx-size", "4096",  # Increased context size
+                "--top-p", "0.8",  # Added for better generation
+                "--top-k", "40",  # Added for better generation
+                "-p", query
+            ]
+            
+            # Run the command with retry mechanism
+            max_retries = 3
+            retry_count = 0
+            while retry_count < max_retries:
+                try:
+                    result = subprocess.run(
+                        cmd, 
+                        capture_output=True, 
+                        text=True, 
+                        timeout=45,  # Increased timeout
+                        cwd=os.getcwd()
+                    )
+                    
+                    # Process output
+                    if result.returncode == 0 and result.stdout:
+                        response = result.stdout.strip()
+                        # Clean up the response
+                        response = ' '.join(
+                            line.strip() for line in response.split('\n') 
+                            if line.strip() 
+                            and not any(x in line.lower() for x in 
+                                      ['loading', 'llama_print', 'log start', 'clip_model', 
+                                       'user:', 'assistant:', '<user>', '<assistant>'])
+                        )
+                        return response if response else "Error: No caption generated"
+                    else:
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            time.sleep(1)  # Wait before retrying
+                            continue
+                        return f"Error: Command failed with code {result.returncode}"
+                        
+                except subprocess.TimeoutExpired:
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        time.sleep(1)  # Wait before retrying
+                        continue
+                    return "Error: Processing timeout after retries"
+                    
+        except Exception as e:
+            return f"Error: {str(e)}"
+            
+        finally:
+            # Clean up temp file
+            try:
+                if temp_img_path and os.path.exists(temp_img_path):
+                    os.remove(temp_img_path)
+            except:
+                pass
 
 # ------------------------------------------------------------------------------
 # BIOMECHANICAL ANALYSIS
@@ -304,140 +435,132 @@ class VideoProcessor:
         self.pose_estimator = PoseEstimator()
         self.frames = []
         self.frame_angles = []
-        self.frame_captions = []  # Store pre-processed captions
+        self.frame_captions = []
         self.biomech_analyzer = BiomechanicalAnalyzer()
         self.movement_analyzer = MovementAnalyzer()
+        self.minicpmv_processor = MiniCPMVProcessor()
+        
+        # Enhanced batch processing settings
+        self.batch_size = 8
+        self.max_retries = 1
+        self.frame_buffer = []
+        self.buffer_size = 16
         self.executor = ThreadPoolExecutor(max_workers=4)
         
-    async def _process_frame_batch(self, frame_batch, start_idx):
-        """Process a batch of frames with RAG API"""
+        # Create temp directory
+        self.temp_dir = os.path.join(os.getcwd(), 'temp_frames')
+        if not os.path.exists(self.temp_dir):
+            os.makedirs(self.temp_dir, exist_ok=True)
+    
+    def _get_temp_path(self, frame_idx: int, retry_count: int = 0) -> str:
+        """Get path for temporary frame file"""
+        return os.path.join(self.temp_dir, f"frame_{frame_idx}_{retry_count}.jpg")
+    
+    def _cleanup_temp_files(self):
+        """Clean up temporary files"""
         try:
-            async with aiohttp.ClientSession() as session:
-                batch_contexts = []
-                batch_prompts = []
-                
-                # Prepare contexts and prompts for the batch
-                for i, (frame, angles) in enumerate(zip(frame_batch, self.frame_angles[start_idx:start_idx + len(frame_batch)])):
-                    frame_idx = start_idx + i
-                    
-                    # Get frame window for sequence context
-                    window_start = max(0, frame_idx - 2)
-                    frame_window = []
-                    for idx in range(window_start, frame_idx + 1):
-                        if idx < len(self.frame_angles) and self.frame_angles[idx] is not None:
-                            curr_angles = self.frame_angles[idx]
-                            frame_window.append({
-                                'angles': {
-                                    'sword_arm': curr_angles.sword_arm_angle if curr_angles.sword_arm_angle is not None else 0.0,
-                                    'front_knee': curr_angles.front_knee_angle if curr_angles.front_knee_angle is not None else 0.0,
-                                    'back_knee': curr_angles.back_knee_angle if curr_angles.back_knee_angle is not None else 0.0,
-                                    'torso': curr_angles.torso_angle if curr_angles.torso_angle is not None else 0.0
-                                }
-                            })
-                    
-                    # Get biomechanical and sequence analysis
-                    frame_data = {
-                        'angles': {
-                            'sword_arm': angles.sword_arm_angle if angles.sword_arm_angle is not None else 0.0,
-                            'front_knee': angles.front_knee_angle if angles.front_knee_angle is not None else 0.0,
-                            'back_knee': angles.back_knee_angle if angles.back_knee_angle is not None else 0.0,
-                            'torso': angles.torso_angle if angles.torso_angle is not None else 0.0
-                        }
-                    }
-                    biomech_analysis = self.biomech_analyzer.analyze_movement(frame_data)
-                    sequence_analysis = self.movement_analyzer.analyze_sequence(frame_window)
-                    
-                    context = {
-                        "movement_phase": {
-                            "sequence": sequence_analysis["sequence"],
-                            "phase": sequence_analysis["phase"],
-                            "confidence": sequence_analysis["confidence"],
-                            "temporal_context": sequence_analysis["temporal_context"]
-                        },
-                        "biomechanics": {
-                            "power_generation": biomech_analysis.power_generation,
-                            "balance_control": biomech_analysis.balance_control,
-                            "movement_efficiency": biomech_analysis.movement_efficiency,
-                            "coordination": biomech_analysis.coordination,
-                            "technical_mastery": biomech_analysis.technical_mastery
-                        },
-                        "current_angles": frame_data['angles']
-                    }
-                    
-                    prompt = f"""Analyze this fencing frame:
-Movement: {context['movement_phase']['sequence']} - {context['movement_phase']['phase']}
-Angles: Sword arm {frame_data['angles']['sword_arm']:.1f}°, Front knee {frame_data['angles']['front_knee']:.1f}°
-Quality: Power {context['biomechanics']['power_generation']:.2f}, Balance {context['biomechanics']['balance_control']:.2f}
-
-Describe the pose and quality in 2-3 sentences. Focus on key technical aspects."""
-                    
-                    batch_contexts.append(context)
-                    batch_prompts.append(prompt)
-                
-                # Process batch with RAG API
-                tasks = []
-                for prompt, context in zip(batch_prompts, batch_contexts):
-                    tasks.append(
-                        session.post(
-                            "http://54.227.20.42/query",
-                            json={
-                                "query": prompt,
-                                "context": context,
-                                "max_tokens": 75,
-                                "temperature": 0.3
-                            },
-                            timeout=30
-                        )
-                    )
-                
-                # Wait for all responses with rate limiting
-                responses = []
-                for i, task in enumerate(tasks):
+            for file in os.listdir(self.temp_dir):
+                if file.endswith('.jpg'):
                     try:
-                        async with task as response:
-                            if response.status == 200:
-                                result = await response.json()
-                                pose_description = result.get("response", "")
-                            else:
-                                pose_description = "Error getting pose description"
-                            responses.append(pose_description)
-                            
-                            # Add delay between requests
-                            if i < len(tasks) - 1:
-                                await asyncio.sleep(0.2)  # 200ms delay between requests
-                                
-                    except Exception as e:
-                        logger.error(f"Error in RAG API request: {str(e)}")
-                        responses.append("Error analyzing pose")
+                        os.remove(os.path.join(self.temp_dir, file))
+                    except:
+                        pass
+        except:
+            pass
+    
+    def _preprocess_frame(self, frame: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[JointAngles]]:
+        """Preprocess a single frame with pose estimation"""
+        try:
+            # Convert BGR to RGB
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Get pose estimation
+            keypoints, angles = self.pose_estimator.estimate_pose(frame_rgb)
+            
+            # Draw pose on frame if keypoints exist
+            if keypoints is not None and angles is not None:
+                annotated_frame = frame_rgb.copy()
+                annotated_frame = self.pose_estimator.draw_pose(annotated_frame, keypoints, angles)
+            else:
+                annotated_frame = frame_rgb
+            
+            # Resize frame for MiniCPM-V
+            annotated_frame = cv2.resize(annotated_frame, (448, 448))
+            
+            return annotated_frame, angles
+            
+        except Exception as e:
+            print(f"\rError in frame preprocessing: {str(e)}", flush=True)
+            return None, None
+    
+    def _process_and_store_batch(self, batch_frames: List[np.ndarray], 
+                               frame_info: List[Tuple[int, Any]]) -> None:
+        """Process a batch of frames and store results"""
+        try:
+            # Process batch with MiniCPM-V
+            for frame_idx, (frame, angles) in enumerate(zip(batch_frames, [info[1] for info in frame_info])):
+                try:
+                    # Show progress
+                    print(f"\nProcessing frame {frame_idx + 1}/83 ", end="", flush=True)
+                    
+                    # Save frame to temp file
+                    temp_path = self._get_temp_path(frame_idx)
+                    success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+                                        [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    
+                    if not success:
+                        print(f"✗ Failed to save frame to {temp_path}")
+                        continue
+                    
+                    # Read and verify the saved frame
+                    frame_img = cv2.imread(temp_path)
+                    if frame_img is None:
+                        print(f"✗ Failed to read saved frame from {temp_path}")
+                        continue
+                    
+                    # Process frame
+                    caption = self.minicpmv_processor.process_frame(
+                        frame_img,
+                        "Describe this image briefly."
+                    )
+                    
+                    # Store results if caption generation was successful
+                    if caption and not caption.startswith("Error:"):
+                        print(f" ✓ Caption: {caption}")
+                        self.frames.append(frame)
+                        self.frame_angles.append(angles)
+                        self.frame_captions.append(caption)
+                    else:
+                        print(f"✗ Failed to generate caption: {caption}")
+                    
+                    # Clean up temp file
+                    try:
+                        os.remove(temp_path)
+                    except:
+                        pass
+                    
+                    # Add delay between frames
+                    time.sleep(1)
+                    
+                except Exception as e:
+                    print(f"\nError processing frame {frame_idx + 1}: {str(e)}")
                 
-                # Create captions for the batch
-                for i, (pose_description, context) in enumerate(zip(responses, batch_contexts)):
-                    biomech = context["biomechanics"]
-                    movement = context["movement_phase"]
-                    
-                    caption = f"""Technical Metrics:
-Power Generation: {biomech['power_generation']:.2f}
-Balance Control: {biomech['balance_control']:.2f}
-Movement Efficiency: {biomech['movement_efficiency']:.2f}
-Coordination: {biomech['coordination']:.2f}
-Overall Mastery: {biomech['technical_mastery']:.2f}
-
-Pose Analysis:
-{pose_description}
-
-Movement Phase: {movement['sequence']} - {movement['phase']}
-{movement['temporal_context']}"""
-                    
-                    self.frame_captions.append(caption)
+            # Print batch summary
+            print(f"\nBatch summary:")
+            print(f"Total frames processed: {len(self.frames)}")
+            print(f"Total captions generated: {len(self.frame_captions)}")
+            print(f"Remaining frames: {83 - len(self.frames)}")
                 
         except Exception as e:
-            logger.error(f"Error processing frame batch: {str(e)}")
-            return ["Error analyzing pose"] * len(frame_batch)
+            print(f"\nError processing batch: {str(e)}")
+        finally:
+            # Clean up all temp files
+            self._cleanup_temp_files()
     
     def process_video(self, video_path: str, target_fps: int = 5) -> None:
-        """Process video file and extract frames with pose estimation"""
+        """Process video file and extract frames with pose estimation using parallel batch processing"""
         try:
-            logger.info(f"Processing video: {video_path}")
+            print("\nProcessing video frames...")
             
             # Open video file
             cap = cv2.VideoCapture(video_path)
@@ -450,79 +573,132 @@ Movement Phase: {movement['sequence']} - {movement['phase']}
             
             # Calculate frame sampling interval
             sample_interval = max(1, int(orig_fps / target_fps))
+            frame_indices = list(range(0, total_frames, sample_interval))
+            total_frames_to_process = len(frame_indices)
             
-            # Process frames
-            frame_idx = 0
+            # Initialize lists
             self.frames = []
             self.frame_angles = []
             self.frame_captions = []
             
-            # Process frames in batches
-            batch_size = 5
-            current_batch = []
-            batch_start_idx = 0
+            # Create batches for parallel processing
+            batch_size = min(8, total_frames_to_process)  # Process 8 frames at a time
+            frame_batches = [frame_indices[i:i + batch_size] for i in range(0, len(frame_indices), batch_size)]
             
-            with tqdm(total=total_frames//sample_interval, desc="Processing frames") as pbar:
-                while True:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                        
-                    if frame_idx % sample_interval == 0:
-                        try:
-                            # Convert BGR to RGB
+            # Process batches with ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=min(4, len(frame_batches))) as executor:
+                futures = []
+                
+                for batch_idx, batch_indices in enumerate(frame_batches):
+                    batch_frames = []
+                    batch_info = []
+                    
+                    # Read frames for this batch
+                    for frame_idx in batch_indices:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                        ret, frame = cap.read()
+                        if ret:
+                            # Preprocess frame
                             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                            
-                            # Get pose estimation
                             keypoints, angles = self.pose_estimator.estimate_pose(frame_rgb)
                             
-                            # Draw pose on frame if keypoints exist
+                            # Draw pose if available
                             if keypoints is not None and angles is not None:
                                 annotated_frame = frame_rgb.copy()
                                 annotated_frame = self.pose_estimator.draw_pose(annotated_frame, keypoints, angles)
                             else:
                                 annotated_frame = frame_rgb
+                                angles = JointAngles()
                             
-                            # Add to current batch
-                            current_batch.append(annotated_frame)
-                            self.frames.append(annotated_frame)
-                            self.frame_angles.append(angles)
-                            
-                            # Process batch if full
-                            if len(current_batch) >= batch_size:
-                                # Create event loop for async processing
-                                loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop)
-                                
-                                # Process the batch
-                                loop.run_until_complete(self._process_frame_batch(current_batch, batch_start_idx))
-                                loop.close()
-                                
-                                # Reset batch
-                                current_batch = []
-                                batch_start_idx = len(self.frames)
-                            
-                            pbar.update(1)
-                            
-                        except Exception as e:
-                            logger.error(f"Error processing frame {frame_idx}: {str(e)}")
-                            continue
-                            
-                    frame_idx += 1
-            
-            # Process remaining frames
-            if current_batch:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(self._process_frame_batch(current_batch, batch_start_idx))
-                loop.close()
+                            # Resize frame
+                            frame_resized = cv2.resize(annotated_frame, (448, 448))
+                            batch_frames.append(frame_resized)
+                            batch_info.append((frame_idx, angles))
+                    
+                    # Submit batch for processing
+                    if batch_frames:
+                        future = executor.submit(
+                            self._process_batch,
+                            batch_frames,
+                            batch_info,
+                            batch_idx,
+                            len(frame_batches)
+                        )
+                        futures.append(future)
+                
+                # Process results as they complete
+                for future in futures:
+                    batch_results = future.result()
+                    if batch_results:
+                        frames, angles, captions = batch_results
+                        self.frames.extend(frames)
+                        self.frame_angles.extend(angles)
+                        self.frame_captions.extend(captions)
             
             cap.release()
-            logger.info(f"Processed {len(self.frames)} frames")
+            print("\nVideo processing completed!")
+            print(f"Total frames processed: {len(self.frames)}")
+            print(f"Total captions generated: {len(self.frame_captions)}")
+            print(f"Success rate: {(len(self.frame_captions) / total_frames_to_process) * 100:.1f}%")
             
         except Exception as e:
-            logger.error(f"Error processing video: {str(e)}")
+            print(f"\nError processing video: {str(e)}")
             raise
+        finally:
+            self._cleanup_temp_files()
+    
+    def _process_batch(self, batch_frames: List[np.ndarray], 
+                      batch_info: List[Tuple[int, JointAngles]], 
+                      batch_idx: int,
+                      total_batches: int) -> Optional[Tuple[List, List, List]]:
+        """Process a batch of frames in parallel"""
+        try:
+            processed_frames = []
+            processed_angles = []
+            processed_captions = []
+            
+            # Process each frame in the batch
+            for i, (frame, (frame_idx, angles)) in enumerate(zip(batch_frames, batch_info)):
+                try:
+                    # Save frame as temporary image
+                    temp_path = self._get_temp_path(frame_idx)
+                    success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+                                        [cv2.IMWRITE_JPEG_QUALITY, 95])
+                    
+                    if not success:
+                        continue
+                    
+                    # Generate caption
+                    caption = self.minicpmv_processor.process_frame(frame)
+                    
+                    # Store results if successful
+                    if not caption.startswith("Error:"):
+                        progress = ((batch_idx * len(batch_frames) + i + 1) / (total_batches * len(batch_frames))) * 100
+                        print(f"\n ✓ Batch {batch_idx + 1}/{total_batches} - Frame {i + 1}/{len(batch_frames)} ({progress:.1f}%)")
+                        print("   Caption: " + caption.replace("\n", "\n            "))
+                        print("-" * 80)
+                        
+                        processed_frames.append(frame)
+                        processed_angles.append(angles)
+                        processed_captions.append(caption)
+                    
+                except Exception as e:
+                    print(f"\nError processing frame in batch {batch_idx + 1}, frame {i + 1}: {str(e)}")
+                    continue
+                
+                finally:
+                    # Clean up temp file
+                    try:
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+                    except:
+                        pass
+            
+            return processed_frames, processed_angles, processed_captions
+            
+        except Exception as e:
+            print(f"\nError processing batch {batch_idx + 1}: {str(e)}")
+            return None
 
 # ------------------------------------------------------------------------------
 # ROUTES
@@ -599,154 +775,24 @@ def chat():
         # Perform biomechanical analysis
         biomech_analysis = video_processor.biomech_analyzer.analyze_movement(frame_window[-1])
         
-        # Create rich context for RAG
-        context = {
-            "movement_phase": {
-                "sequence": sequence_analysis["sequence"],
-                "phase": sequence_analysis["phase"],
-                "confidence": sequence_analysis["confidence"],
-                "temporal_context": sequence_analysis["temporal_context"]
-            },
-            "biomechanics": {
-                "power_generation": biomech_analysis.power_generation,
-                "balance_control": biomech_analysis.balance_control,
-                "movement_efficiency": biomech_analysis.movement_efficiency,
-                "coordination": biomech_analysis.coordination,
-                "technical_mastery": biomech_analysis.technical_mastery
-            },
-            "current_angles": frame_window[-1]['angles']
-        }
+        # Create context for MiniCPM-V
+        context = f"""This is a fencing video analysis.
+Current movement: {sequence_analysis['sequence']} - {sequence_analysis['phase']}
+Technical metrics:
+- Power Generation: {biomech_analysis.power_generation:.2f}
+- Balance Control: {biomech_analysis.balance_control:.2f}
+- Movement Efficiency: {biomech_analysis.movement_efficiency:.2f}
+- Coordination: {biomech_analysis.coordination:.2f}
+- Overall Mastery: {biomech_analysis.technical_mastery:.2f}
+
+Question: {query}"""
         
-        # Determine the type of question and create appropriate prompt
-        if any(word in query for word in ['hi', 'hello', 'hey']):
-            prompt = """You are a friendly fencing coach. The student just said hello.
-Give a warm, brief greeting and ask how you can help them with their fencing technique today.
-Keep it casual and encouraging, like a real coach."""
-            
-        elif any(word in query for word in ['what am i doing', 'what actions', 'what movement']):
-            prompt = f"""You are a friendly fencing coach. The student wants to know what movements they're performing.
-Current Movement Sequence: {sequence_analysis['temporal_context']}
-Current Phase: {context['movement_phase']['sequence']} - {context['movement_phase']['phase']}
-
-Describe what they're doing in simple, clear terms. Focus on the actual movements first, then maybe ONE key observation about their form.
-Keep it conversational, like you're watching them in person.
-
-Example: "You're working on a lunge sequence. I can see you preparing with good back leg positioning, though you might want to adjust your sword arm a bit."
-"""
-        else:
-            # Default coaching prompt for other questions
-            prompt = f"""You are a friendly fencing coach having a conversation with your student.
-
-Current Movement: {context['movement_phase']['sequence']} - {context['movement_phase']['phase']}
-Technical Context:
-- Power Generation: {context['biomechanics']['power_generation']:.2f}
-- Balance Control: {context['biomechanics']['balance_control']:.2f}
-- Movement Efficiency: {context['biomechanics']['movement_efficiency']:.2f}
-- Coordination: {context['biomechanics']['coordination']:.2f}
-
-Student Question: {query}
-
-Answer like a real coach would in person:
-1. Be conversational and encouraging
-2. Address their question directly
-3. Maybe add ONE specific tip if relevant
-4. Keep it natural - don't list numbers unless specifically asked
-
-Example: "That's a good question! Your lunge is looking strong, but try focusing on extending your sword arm fully before pushing off."
-"""
+        # Get current frame and process with MiniCPM-V
+        current_frame_img = video_processor.frames[current_frame]
+        response = video_processor.minicpmv_processor.process_frame(current_frame_img, context)
         
-        try:
-            # Process in batches to avoid rate limiting
-            max_retries = 3
-            retry_delay = 2
+        return jsonify({'response': response})
             
-            async def process_rag_request():
-                async with aiohttp.ClientSession() as session:
-                    try:
-                        async with session.post(
-                            "http://54.227.20.42/query",
-                            json={
-                                "query": prompt,
-                                "context": context,
-                                "max_tokens": 100,
-                                "temperature": 0.7,  # Increased for more natural variation
-                                "response_format": {
-                                    "type": "text",
-                                    "max_length": 200
-                                }
-                            },
-                            timeout=30
-                        ) as response:
-                            if response.status == 200:
-                                result = await response.json()
-                                return result.get("response", "")
-                            else:
-                                logger.error(f"RAG API error: {response.status}")
-                                return None
-                    except Exception as e:
-                        logger.error(f"RAG API request error: {str(e)}")
-                        return None
-            
-            # Create event loop for async processing
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            for attempt in range(max_retries):
-                try:
-                    feedback = loop.run_until_complete(process_rag_request())
-                    if feedback:
-                        # Format the feedback
-                        def format_coaching_feedback(text):
-                            # Remove verbose patterns
-                            patterns = [
-                                "As a fencing coach, ",
-                                "Based on the video, ",
-                                "I can observe that ",
-                                "It's important to note that ",
-                                "I notice that ",
-                                "I see that ",
-                                "Your ",
-                                "I would ",
-                                "Let me "
-                            ]
-                            for pattern in patterns:
-                                text = text.replace(pattern, "")
-                            
-                            # Clean up any leftover artifacts
-                            text = text.strip()
-                            if text.lower().startswith("your"):
-                                text = text[4:].strip()
-                            if text.lower().startswith("i see"):
-                                text = text[5:].strip()
-                            if text.lower().startswith("i notice"):
-                                text = text[8:].strip()
-                            
-                            # Capitalize first letter
-                            text = text[0].upper() + text[1:]
-                            
-                            return text
-                        
-                        feedback = format_coaching_feedback(feedback)
-                        
-                        return jsonify({'response': feedback})
-                    
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay * (attempt + 1))
-                        continue
-                    else:
-                        return jsonify({'error': 'Error generating coaching feedback'}), 500
-                        
-                except Exception as e:
-                    if attempt == max_retries - 1:
-                        logger.error(f"Error in chat: {str(e)}")
-                        return jsonify({'error': str(e)}), 500
-                    time.sleep(retry_delay * (attempt + 1))
-                    
-            loop.close()
-            
-        except Exception as e:
-            logger.error(f"Error in chat: {str(e)}")
-            return jsonify({'error': str(e)}), 500
     except Exception as e:
         logger.error(f"Error in chat: {str(e)}")
         return jsonify({'error': str(e)}), 500
@@ -793,6 +839,34 @@ def view_video():
     if not video_processor:
         return render_template('index.html', error="Please upload a video first")
     return render_template('viewer.html', total_frames=len(video_processor.frames))
+
+@app.route('/test_caption', methods=['GET'])
+def test_caption():
+    """Test route to verify caption generation"""
+    try:
+        # Create a simple test image
+        test_img = np.zeros((448, 448, 3), dtype=np.uint8)
+        cv2.putText(test_img, "Test", (150, 225), cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 2)
+        
+        # Initialize processor
+        processor = MiniCPMVProcessor()
+        
+        # Test caption generation
+        caption = processor.process_frame(test_img, "What is in this image?")
+        
+        return jsonify({
+            'status': 'success',
+            'caption': caption,
+            'message': 'Caption generation test completed'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in test caption: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'message': 'Caption generation test failed'
+        }), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000) 

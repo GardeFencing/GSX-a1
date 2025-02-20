@@ -1,94 +1,60 @@
-from flask import Flask, request, jsonify, render_template, send_file
+import warnings
+warnings.filterwarnings("ignore")
+
 import os
-from video_chat import VideoChat
 import logging
-import cv2
-import base64
+import gradio as gr
+from src.app.response import describe_video
 
-app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = 'uploads'
-video_chat = None  # Global VideoChat instance
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Ensure upload folder exists
-if not os.path.exists(app.config['UPLOAD_FOLDER']):
-    os.makedirs(app.config['UPLOAD_FOLDER'])
-
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/upload', methods=['POST'])
-def upload_file():
-    global video_chat
+def gradio_interface(video_file, question):
+    """Gradio interface function"""
     try:
-        if 'video' not in request.files:
-            return jsonify({'error': 'No video file uploaded'}), 400
+        if not video_file or not question:
+            return "Please provide both a video and a question."
             
-        video_file = request.files['video']
-        if video_file.filename == '':
-            return jsonify({'error': 'No selected file'}), 400
-            
-        # Save the uploaded file
-        video_path = os.path.join(app.config['UPLOAD_FOLDER'], video_file.filename)
-        video_file.save(video_path)
-        
-        # Initialize VideoChat and process video
-        video_chat = VideoChat()  # Create instance without arguments
-        video_chat.process_video(video_path)  # Process video separately
-        
-        return jsonify({
-            'message': 'Video processed successfully',
-            'total_frames': len(video_chat.frames)
-        })
-        
+        response = describe_video(video_file.name, question)
+        return response
+    
     except Exception as e:
-        logging.error(f"Error processing upload: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error in interface: {str(e)}")
+        return f"Error: {str(e)}"
 
-@app.route('/chat', methods=['POST'])
-def chat():
-    global video_chat
-    try:
-        if not video_chat:
-            return jsonify({'error': 'Please upload a video first'}), 400
-            
-        data = request.get_json()
-        if not data or 'query' not in data:
-            return jsonify({'error': 'No query provided'}), 400
-            
-        query = data['query']
-        response = video_chat.chat(query)
-        
-        return jsonify({
-            'response': response
-        })
-        
-    except Exception as e:
-        logging.error(f"Error in chat: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+# Create Gradio interface
+title = "Video Question Answering with MiniCPM-V"
+description = """
+This application uses MiniCPM-V 2.6 to answer questions about videos.
+Upload a video and ask a question about it - the AI will analyze the video and provide an answer.
 
-@app.route('/get_frame/<int:frame_idx>')
-def get_frame(frame_idx):
-    global video_chat
-    try:
-        if not video_chat or frame_idx >= len(video_chat.frames):
-            return jsonify({'error': 'Invalid frame index'}), 400
-            
-        frame = video_chat.frames[frame_idx]
-        caption = video_chat.captions[frame_idx] if frame_idx < len(video_chat.captions) else ""
-        
-        # Convert frame to base64
-        _, buffer = cv2.imencode('.jpg', frame)
-        frame_b64 = base64.b64encode(buffer).decode('utf-8')
-        
-        return jsonify({
-            'frame': frame_b64,
-            'caption': caption
-        })
-        
-    except Exception as e:
-        logging.error(f"Error getting frame: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+Model: MiniCPM-V 2.6 (8B parameters)
+Features:
+- Multi-image and video understanding
+- Multilingual capabilities
+- Efficient token generation
+"""
 
-if __name__ == '__main__':
-    app.run(debug=True, port=5000) 
+# Example questions
+examples = [
+    ["path/to/example1.mp4", "What is happening in this video?"],
+    ["path/to/example2.mp4", "How many people are in the video?"],
+    ["path/to/example3.mp4", "Describe the main action in this scene."]
+]
+
+iface = gr.Interface(
+    fn=gradio_interface,
+    inputs=[
+        gr.Video(label="Upload Video"),
+        gr.Textbox(label="Question", placeholder="Ask a question about the video...")
+    ],
+    outputs=gr.Textbox(label="Answer"),
+    title=title,
+    description=description,
+    examples=examples,
+    theme="gradio/soft"
+)
+
+if __name__ == "__main__":
+    iface.launch(debug=True) 

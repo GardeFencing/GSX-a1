@@ -2,3 +2,15 @@
     path = fairseq/model_parallel/megatron
     url = https://github.com/ngoyal2707/Megatron-LM
     branch = fairseq
+[submodule "llama.cpp"]
+	path = llama.cpp
+	url = https://github.com/original/llama.cpp.git
+[submodule "MiniCPM-V-2_6-gguf"]
+	path = MiniCPM-V-2_6-gguf
+	url = https://github.com/original/MiniCPM-V-2_6-gguf.git
+[submodule "VidiQA"]
+	path = VidiQA
+	url = https://github.com/original/VidiQA.git
+[submodule "GardeRAG"]
+	path = GardeRAG
+	url = https://github.com/original/GardeRAG.git
