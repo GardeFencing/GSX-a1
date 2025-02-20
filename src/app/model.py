@@ -30,19 +30,30 @@ def load_model_and_tokenizer() -> Tuple[AutoModel, AutoTokenizer]:
     try:
         logger.info(f"Loading model {MODEL_NAME} on {DEVICE}...")
         
+        # First try to load from local directory
+        local_path = os.path.join(os.getcwd(), "MiniCPM-V-2_6-gguf")
+        if os.path.exists(local_path):
+            logger.info(f"Loading model from local path: {local_path}")
+            model_path = local_path
+        else:
+            logger.info("Local model not found, using Hugging Face model")
+            model_path = MODEL_NAME
+        
         # Load model with correct settings
         model = AutoModel.from_pretrained(
-            MODEL_NAME,
+            model_path,
             trust_remote_code=True,
             attn_implementation='sdpa',
-            torch_dtype=torch.bfloat16
+            torch_dtype=torch.bfloat16,
+            local_files_only=os.path.exists(local_path)
         )
         model = model.eval().to(DEVICE)
         
         # Load tokenizer
         tokenizer = AutoTokenizer.from_pretrained(
-            MODEL_NAME,
-            trust_remote_code=True
+            model_path,
+            trust_remote_code=True,
+            local_files_only=os.path.exists(local_path)
         )
         
         logger.info("Model and tokenizer loaded successfully")
