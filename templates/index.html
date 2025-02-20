@@ -129,13 +129,28 @@
             
             // Get frame data
             fetch(`/get_frame/${currentFrameIndex}`)
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
                 .then(data => {
-                    if (data.caption) {
+                    if (data.error) {
+                        console.error('Error fetching caption:', data.error);
+                        document.getElementById('currentCaption').textContent = 'Error loading caption';
+                    } else if (data.caption) {
                         document.getElementById('currentCaption').textContent = data.caption;
+                        // Store caption for chat context
+                        if (!frameCaptions[currentFrameIndex]) {
+                            frameCaptions[currentFrameIndex] = data.caption;
+                        }
                     }
                 })
-                .catch(error => console.error('Error fetching caption:', error));
+                .catch(error => {
+                    console.error('Error fetching caption:', error);
+                    document.getElementById('currentCaption').textContent = 'Error loading caption';
+                });
         }
 
         // Video upload and preview
@@ -212,6 +227,7 @@
                 max_tokens: parseInt(document.getElementById('maxTokens').value)
             };
 
+            console.log('Sending chat request:', params);
             fetch('/chat', {
                 method: 'POST',
                 headers: {
@@ -219,8 +235,14 @@
                 },
                 body: JSON.stringify(params)
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
             .then(data => {
+                console.log('Got chat response:', data);
                 if (data.error) {
                     addMessage('error', `Error: ${data.error}`);
                 } else {
@@ -228,6 +250,7 @@
                 }
             })
             .catch(error => {
+                console.error('Error in chat:', error);
                 addMessage('error', `Error: ${error.message}`);
             });
         }

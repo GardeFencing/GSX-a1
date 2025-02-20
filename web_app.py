@@ -679,8 +679,13 @@ def upload_video():
 def chat():
     global video_processor
     try:
-        if not video_processor or not video_processor.processing_complete:
+        print(f"Chat request received. Video processor state: {video_processor is not None}")
+        if not video_processor:
             return jsonify({'error': 'Please upload a video first'}), 400
+            
+        print(f"Processing complete: {video_processor.processing_complete}, Frames: {len(video_processor.frames)}, Captions: {len(video_processor.frame_captions)}")
+        if not video_processor.processing_complete:
+            return jsonify({'error': 'Video is still processing'}), 400
             
         data = request.get_json()
         if not data or 'query' not in data:
@@ -688,6 +693,7 @@ def chat():
             
         query = data['query']
         current_frame = data.get('current_frame', 0)
+        print(f"Processing query: {query} for frame {current_frame}")
         
         # Ensure current_frame is within bounds
         if current_frame >= len(video_processor.frames):
@@ -712,16 +718,19 @@ def chat():
         Please answer the following question about the video: {query}
         """
         
+        print("Sending query to MiniCPM-V processor...")
         # Process the query with context
         response = video_processor.minicpmv_processor.process_frames(
             frame_context,
             system_prompt=system_prompt,
             query=query
         )
+        print(f"Got response: {response}")
         
         return jsonify({'response': response})
             
     except Exception as e:
+        print(f"Error in chat: {str(e)}")
         logger.error(f"Error in chat: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
