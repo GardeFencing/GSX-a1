@@ -461,12 +461,15 @@ class VideoProcessor:
     _instance = None  # Singleton instance
     
     def __new__(cls):
+        print("Creating new VideoProcessor")
         if cls._instance is None:
+            print("Creating new VideoProcessor instance")
             cls._instance = super(VideoProcessor, cls).__new__(cls)
             cls._instance._initialized = False
         return cls._instance
     
     def __init__(self):
+        print("Initializing VideoProcessor")
         if self._initialized:
             return
             
@@ -480,7 +483,7 @@ class VideoProcessor:
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
         
         # Create temp directory
-        self.temp_dir = os.path.join(os.getcwd(), 'temp_frames')
+        self.temp_dir = os.path.join('/home/ubuntu/GSX-a1', 'temp_frames')
         if not os.path.exists(self.temp_dir):
             os.makedirs(self.temp_dir, exist_ok=True)
             
@@ -540,28 +543,81 @@ class VideoProcessor:
             if not processed_frames:
                 return []
             
-            # Process the batch together
-            system_prompt = "You are analyzing a sequence of video frames. Describe each frame briefly and note any changes or movements."
-            captions = self.minicpmv_processor.process_frames(
-                processed_frames,
-                system_prompt=system_prompt,
-                query="Describe these frames in sequence, noting any changes or movements between them."
-            )
+            # Save frames as temporary images
+            temp_paths = []
+            for i, frame in enumerate(processed_frames):
+                temp_path = os.path.join(self.temp_dir, f"temp_frame_{int(time.time() * 1000)}_{i}.jpg")
+                success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+                                    [cv2.IMWRITE_JPEG_QUALITY, 95])
+                if success:
+                    temp_paths.append(temp_path)
             
-            # Split the caption into individual frame descriptions
+            if not temp_paths:
+                return []
+            
             try:
-                frame_captions = captions.split('\n')
-                # Ensure we have enough captions
-                while len(frame_captions) < len(processed_frames):
-                    frame_captions.append("No specific description available")
-                # Trim excess captions
-                frame_captions = frame_captions[:len(processed_frames)]
-            except:
-                # Fallback: use the same caption for all frames
-                frame_captions = [captions] * len(processed_frames)
-            
-            # Return results
-            return list(zip(processed_frames, frame_captions))
+                # Process the batch together
+                system_prompt = "You are analyzing a sequence of video frames. Describe each frame briefly and note any changes or movements."
+                
+                # Construct command
+                cmd = [
+                    self.minicpmv_processor.cli_path,
+                    "-m", self.minicpmv_processor.model_path,
+                    "--mmproj", self.minicpmv_processor.mmproj_path,
+                    "-t", str(self.minicpmv_processor.n_threads),
+                    "-n", "256",
+                    "--temp", str(self.minicpmv_processor.temp),
+                    "--ctx-size", "8192",
+                    "--top-p", str(self.minicpmv_processor.top_p),
+                    "--top-k", str(self.minicpmv_processor.top_k),
+                    "--system", system_prompt
+                ]
+                
+                # Add images
+                for temp_path in temp_paths:
+                    cmd.extend(["--image", temp_path])
+                
+                # Add query
+                cmd.extend(["-p", "Describe these frames in sequence, noting any changes or movements between them."])
+                
+                # Run command
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    cwd='/home/ubuntu/GSX-a1'
+                )
+                
+                if result.returncode == 0 and result.stdout:
+                    # Clean up the response
+                    response = ' '.join(
+                        line.strip() for line in result.stdout.split('\n')
+                        if line.strip()
+                        and not any(x in line.lower() for x in
+                                  ['loading', 'llama_print', 'log start', 'clip_model',
+                                   'user:', 'assistant:', '<user>', '<assistant>'])
+                    )
+                    
+                    # Split into individual frame descriptions
+                    frame_captions = response.split('\n')
+                    while len(frame_captions) < len(processed_frames):
+                        frame_captions.append("No specific description available")
+                    frame_captions = frame_captions[:len(processed_frames)]
+                    
+                    return list(zip(processed_frames, frame_captions))
+                else:
+                    print(f"Command failed with code {result.returncode}: {result.stderr}")
+                    return []
+                    
+            finally:
+                # Clean up temp files
+                for temp_path in temp_paths:
+                    try:
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+                    except:
+                        pass
                 
         except Exception as e:
             print(f"\nError processing batch: {str(e)}")
@@ -711,30 +767,80 @@ def chat():
         start_idx = max(0, current_frame - 2)
         end_idx = min(len(video_processor.frames), current_frame + 3)
         
-        # Get 5 frames around the current frame for context
-        for i in range(start_idx, end_idx):
-            frame_context.append(video_processor.frames[i])
-        
-        # Create a context-aware prompt
-        system_prompt = f"""You are analyzing a video sequence. The user is currently viewing frame {current_frame + 1} of {len(video_processor.frames)}.
-        The frame shows: {video_processor.frame_captions[current_frame]}
-        
-        Previous context: {' '.join(video_processor.frame_captions[start_idx:current_frame])}
-        Next context: {' '.join(video_processor.frame_captions[current_frame + 1:end_idx])}
-        
-        Please answer the following question about the video: {query}
-        """
-        
-        print("Sending query to MiniCPM-V processor...")
-        # Process the query with context
-        response = video_processor.minicpmv_processor.process_frames(
-            frame_context,
-            system_prompt=system_prompt,
-            query=query
-        )
-        print(f"Got response: {response}")
-        
-        return jsonify({'response': response})
+        # Save frames as temporary images
+        temp_paths = []
+        try:
+            # Get 5 frames around the current frame for context
+            for i in range(start_idx, end_idx):
+                frame = video_processor.frames[i]
+                temp_path = os.path.join(video_processor.temp_dir, f"chat_frame_{int(time.time() * 1000)}_{i}.jpg")
+                success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+                                    [cv2.IMWRITE_JPEG_QUALITY, 95])
+                if success:
+                    temp_paths.append(temp_path)
+            
+            if not temp_paths:
+                return jsonify({'error': 'Failed to save frames'}), 500
+            
+            # Create context-aware system prompt
+            system_prompt = f"""You are analyzing a video sequence. The user is currently viewing frame {current_frame + 1} of {len(video_processor.frames)}.
+            The frame shows: {video_processor.frame_captions[current_frame]}
+            
+            Previous context: {' '.join(video_processor.frame_captions[start_idx:current_frame])}
+            Next context: {' '.join(video_processor.frame_captions[current_frame + 1:end_idx])}"""
+            
+            # Construct command
+            cmd = [
+                video_processor.minicpmv_processor.cli_path,
+                "-m", video_processor.minicpmv_processor.model_path,
+                "--mmproj", video_processor.minicpmv_processor.mmproj_path,
+                "-t", str(video_processor.minicpmv_processor.n_threads),
+                "-n", "256",
+                "--temp", str(video_processor.minicpmv_processor.temp),
+                "--ctx-size", "8192",
+                "--top-p", str(video_processor.minicpmv_processor.top_p),
+                "--top-k", str(video_processor.minicpmv_processor.top_k),
+                "--system", system_prompt
+            ]
+            
+            # Add images
+            for temp_path in temp_paths:
+                cmd.extend(["--image", temp_path])
+            
+            # Add query
+            cmd.extend(["-p", query])
+            
+            # Run command
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd='/home/ubuntu/GSX-a1'
+            )
+            
+            if result.returncode == 0 and result.stdout:
+                # Clean up the response
+                response = ' '.join(
+                    line.strip() for line in result.stdout.split('\n')
+                    if line.strip()
+                    and not any(x in line.lower() for x in
+                              ['loading', 'llama_print', 'log start', 'clip_model',
+                               'user:', 'assistant:', '<user>', '<assistant>'])
+                )
+                return jsonify({'response': response})
+            else:
+                print(f"Command failed with code {result.returncode}: {result.stderr}")
+                return jsonify({'error': 'Failed to generate response'}), 500
+                
+        finally:
+            # Clean up temp files
+            for temp_path in temp_paths:
+                try:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                except:
+                    pass
             
     except Exception as e:
         print(f"Error in chat: {str(e)}")
