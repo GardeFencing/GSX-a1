@@ -596,6 +596,7 @@ class VideoProcessor:
                     print("Running command:", " ".join(cmd))
                     
                     # Run command with increased timeout
+                    logger.info(f"Running command for frame {i+1}")
                     result = subprocess.run(
                         cmd,
                         capture_output=True,
@@ -605,32 +606,49 @@ class VideoProcessor:
                         cwd=self.base_dir  # Run from base directory
                     )
                     
-                    # Log command output regardless of success
-                    logger.debug(f"Command stdout: {result.stdout}")
-                    logger.debug(f"Command stderr: {result.stderr}")
+                    # Always log command output
+                    if result.stdout:
+                        logger.info(f"Command stdout for frame {i+1}:\n{result.stdout}")
+                    if result.stderr:
+                        logger.error(f"Command stderr for frame {i+1}:\n{result.stderr}")
                     
                     if result.returncode != 0:
-                        error_msg = f"Command failed with code {result.returncode}: {result.stderr}"
-                        logger.error(error_msg)
+                        error_msg = f"Command failed with code {result.returncode}"
+                        logger.error(f"{error_msg} for frame {i+1}")
                         self.frame_captions.append(f"Error: {error_msg}")
                         continue
                     
                     # Process output only if command succeeded
-                    response = ' '.join(
-                        line.strip() for line in result.stdout.split('\n')
-                        if line.strip()
-                        and not any(x in line.lower() for x in
-                                  ['loading', 'llama_print', 'log start', 'clip_model',
-                                   'user:', 'assistant:', '<user>', '<assistant>',
-                                   'key clip.vision', 'warning:', 'error:'])
-                    )
+                    response = None
+                    try:
+                        # Split output into lines and process
+                        lines = result.stdout.split('\n')
+                        response_lines = []
+                        capture_response = False
+                        
+                        for line in lines:
+                            line = line.strip()
+                            # Start capturing after seeing assistant's response
+                            if '<assistant>' in line.lower():
+                                capture_response = True
+                                continue
+                            # Stop capturing at the next prompt or system message
+                            if capture_response and ('<user>' in line.lower() or 'llama_print' in line.lower()):
+                                break
+                            if capture_response and line:
+                                response_lines.append(line)
+                        
+                        response = ' '.join(response_lines).strip()
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing output for frame {i+1}: {str(e)}")
                     
                     if response:
                         logger.info(f"Generated caption for frame {i+1}: {response}")
                         self.frame_captions.append(response)
                     else:
-                        error_msg = "No caption generated from command output"
-                        logger.warning(error_msg)
+                        error_msg = "No valid response generated from model output"
+                        logger.warning(f"{error_msg} for frame {i+1}")
                         self.frame_captions.append(error_msg)
                     
                 except subprocess.TimeoutExpired:
@@ -724,24 +742,32 @@ def upload_video():
 def chat():
     global video_processor
     try:
-        print(f"Chat request received. Video processor state: {video_processor is not None}")
+        logger.info("Chat request received")
+        
+        # Check video processor state
         if not video_processor:
+            logger.error("No video processor initialized")
             return jsonify({'error': 'Please upload a video first'}), 400
             
-        print(f"Processing complete: {video_processor.processing_complete}, Frames: {len(video_processor.frames)}, Captions: {len(video_processor.frame_captions)}")
+        logger.info(f"Video processor state - Processing complete: {video_processor.processing_complete}, Frames: {len(video_processor.frames)}, Captions: {len(video_processor.frame_captions)}")
+        
         if not video_processor.processing_complete:
+            logger.error("Video still processing")
             return jsonify({'error': 'Video is still processing'}), 400
             
+        # Validate request data
         data = request.get_json()
         if not data or 'query' not in data:
+            logger.error("Invalid request data")
             return jsonify({'error': 'No query provided'}), 400
             
         query = data['query']
         current_frame = data.get('current_frame', 0)
-        print(f"Processing query: {query} for frame {current_frame}")
+        logger.info(f"Processing query: '{query}' for frame {current_frame}")
         
-        # Ensure current_frame is within bounds
+        # Validate frame index
         if current_frame >= len(video_processor.frames):
+            logger.error(f"Invalid frame index {current_frame}")
             return jsonify({'error': 'Invalid frame index'}), 400
             
         # Get current frame
@@ -750,12 +776,15 @@ def chat():
         # Save frame as temporary image
         temp_path = os.path.join(video_processor.temp_dir, f"chat_frame_{int(time.time() * 1000)}.jpg")
         try:
+            # Save frame
             success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-            
             if not success:
+                logger.error("Failed to save frame")
                 return jsonify({'error': 'Failed to save frame'}), 500
             
-            # Use exact working command format
+            logger.info(f"Frame saved to {temp_path}")
+            
+            # Construct command
             cmd = [
                 video_processor.cli_path,
                 "-m", video_processor.model_path,
@@ -771,48 +800,76 @@ def chat():
                 "-p", query
             ]
             
+            logger.info(f"Running command: {' '.join(cmd)}")
+            
+            # Execute command
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False  # Don't raise on non-zero exit
+            )
+            
+            # Log command output
+            if result.stdout:
+                logger.info(f"Command stdout:\n{result.stdout}")
+            if result.stderr:
+                logger.error(f"Command stderr:\n{result.stderr}")
+            
+            if result.returncode != 0:
+                logger.error(f"Command failed with code {result.returncode}")
+                return jsonify({'error': f'Command failed with code {result.returncode}'}), 500
+            
+            # Process model output
             try:
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                    check=True
-                )
+                # Split output into lines and process
+                lines = result.stdout.split('\n')
+                response_lines = []
+                capture_response = False
                 
-                # Clean up the response
-                response = ' '.join(
-                    line.strip() for line in result.stdout.split('\n')
-                    if line.strip()
-                    and not any(x in line.lower() for x in
-                              ['loading', 'llama_print', 'log start', 'clip_model',
-                               'user:', 'assistant:', '<user>', '<assistant>'])
-                )
+                for line in lines:
+                    line = line.strip()
+                    # Start capturing after seeing assistant's response
+                    if '<assistant>' in line.lower():
+                        capture_response = True
+                        continue
+                    # Stop capturing at the next prompt or system message
+                    if capture_response and ('<user>' in line.lower() or 'llama_print' in line.lower()):
+                        break
+                    if capture_response and line:
+                        response_lines.append(line)
+                
+                response = ' '.join(response_lines).strip()
                 
                 if not response:
+                    logger.warning("No response generated from model output")
                     return jsonify({'error': 'No response generated'}), 500
-                    
+                
+                logger.info(f"Generated response: {response}")
                 return jsonify({'response': response})
                 
-            except subprocess.TimeoutExpired:
-                return jsonify({'error': 'Request timed out'}), 504
-            except subprocess.CalledProcessError as e:
-                print(f"Command failed: {e.stderr}")
-                return jsonify({'error': 'Failed to generate response'}), 500
             except Exception as e:
-                print(f"Unexpected error: {str(e)}")
-                return jsonify({'error': 'Internal server error'}), 500
+                logger.error(f"Error processing model output: {str(e)}", exc_info=True)
+                return jsonify({'error': 'Failed to process model output'}), 500
                 
+        except subprocess.TimeoutExpired as e:
+            logger.error("Command timed out", exc_info=True)
+            return jsonify({'error': 'Request timed out'}), 504
+        except Exception as e:
+            logger.error(f"Unexpected error in chat: {str(e)}", exc_info=True)
+            return jsonify({'error': 'Internal server error'}), 500
         finally:
             # Clean up temp file
             try:
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
+                    logger.info(f"Cleaned up temp file: {temp_path}")
             except Exception as e:
-                print(f"Failed to clean up temp file: {str(e)}")
+                logger.error(f"Failed to clean up temp file: {str(e)}")
             
     except Exception as e:
-        print(f"Error in chat: {str(e)}")
+        logger.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
         return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/get_frame/<int:frame_idx>')

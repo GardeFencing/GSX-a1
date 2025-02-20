@@ -1,0 +1,198 @@
+(venv_py310) ubuntu@ip-172-31-20-21:~/GSX-a1$ cd /home/ubuntu/GSX-a1 && /home/ubuntu/GSX-a1/llama.cpp/build/bin/llama-minicpmv-cli -m MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf --mmproj MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf -t 4 -n 512 --temp 0.1 --ctx-size 2048 --repeat-penalty 1.1 --top-p 0.7 --top-k 40 --image temp_frames/frame_1.jpg -p "Describe what is happening in this frame."
+build: 4748 (c392e509) with cc (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0 for x86_64-linux-gnu
+clip_model_load: description:  image encoder for MiniCPM-V
+clip_model_load: GGUF version: 3
+clip_model_load: alignment:    32
+clip_model_load: n_tensors:    455
+clip_model_load: n_kv:         19
+clip_model_load: ftype:        f16
+
+clip_model_load: loaded meta data with 19 key-value pairs and 455 tensors from MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf
+clip_model_load: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+clip_model_load: - kv   0:                       general.architecture str              = clip
+clip_model_load: - kv   1:                      clip.has_text_encoder bool             = false
+clip_model_load: - kv   2:                    clip.has_vision_encoder bool             = true
+clip_model_load: - kv   3:                clip.has_minicpmv_projector bool             = true
+clip_model_load: - kv   4:                          general.file_type u32              = 1
+clip_model_load: - kv   5:                        general.description str              = image encoder for MiniCPM-V
+clip_model_load: - kv   6:                        clip.projector_type str              = resampler
+clip_model_load: - kv   7:                      clip.minicpmv_version i32              = 3
+clip_model_load: - kv   8:                     clip.vision.image_size u32              = 448
+clip_model_load: - kv   9:                     clip.vision.patch_size u32              = 14
+clip_model_load: - kv  10:               clip.vision.embedding_length u32              = 1152
+clip_model_load: - kv  11:            clip.vision.feed_forward_length u32              = 4304
+clip_model_load: - kv  12:                 clip.vision.projection_dim u32              = 0
+clip_model_load: - kv  13:           clip.vision.attention.head_count u32              = 16
+clip_model_load: - kv  14:   clip.vision.attention.layer_norm_epsilon f32              = 0.000001
+clip_model_load: - kv  15:                    clip.vision.block_count u32              = 27
+clip_model_load: - kv  16:                     clip.vision.image_mean arr[f32,3]       = [0.500000, 0.500000, 0.500000]
+clip_model_load: - kv  17:                      clip.vision.image_std arr[f32,3]       = [0.500000, 0.500000, 0.500000]
+clip_model_load: - kv  18:                              clip.use_gelu bool             = true
+clip_model_load: - type  f32:  285 tensors
+clip_model_load: - type  f16:  170 tensors
+clip_model_load: CLIP using CPU backend
+key clip.use_silu not found in file
+clip_model_load: text_encoder:   0
+clip_model_load: vision_encoder: 1
+clip_model_load: llava_projector:  0
+clip_model_load: minicpmv_projector:  1
+clip_model_load: glm_projector:  0
+clip_model_load: model size:     996.02 MB
+clip_model_load: metadata size:  0.16 MB
+clip_model_load: params backend buffer size =  996.02 MB (455 tensors)
+key clip.vision.image_grid_pinpoints not found in file
+key clip.vision.mm_patch_merge_type not found in file
+key clip.vision.image_crop_resolution not found in file
+clip_image_build_graph: 448 448
+clip_model_load: compute allocated memory: 102.80 MB
+uhd_slice_image: multiple 5
+uhd_slice_image: image_size: 1280 720; source_image size: 602 336
+uhd_slice_image: image_size: 1280 720; best_grid: 3 2
+uhd_slice_image: refine_image_size: 1470 812; refine_size: 1470 812
+clip_image_preprocess: 602 336
+clip_image_preprocess: 490 406
+clip_image_preprocess: 490 406
+clip_image_preprocess: 490 406
+clip_image_preprocess: 490 406
+clip_image_preprocess: 490 406
+clip_image_preprocess: 490 406
+clip_image_build_graph: 602 336
+encode_image_with_clip: step 1 of 7 encoded in  8633.63 ms
+clip_image_build_graph: 490 406
+encode_image_with_clip: step 2 of 7 encoded in  9518.43 ms
+clip_image_build_graph: 490 406
+encode_image_with_clip: step 3 of 7 encoded in  9513.30 ms
+clip_image_build_graph: 490 406
+encode_image_with_clip: step 4 of 7 encoded in  9383.49 ms
+clip_image_build_graph: 490 406
+encode_image_with_clip: step 5 of 7 encoded in  9533.14 ms
+clip_image_build_graph: 490 406
+encode_image_with_clip: step 6 of 7 encoded in  9665.63 ms
+clip_image_build_graph: 490 406
+encode_image_with_clip: step 7 of 7 encoded in  9472.05 ms
+encode_image_with_clip: all 7 segments encoded in 65721.10 ms
+encode_image_with_clip: load_image_size 1280 720
+encode_image_with_clip: image embedding created: 448 tokens
+
+encode_image_with_clip: image encoded in 65726.16 ms by CLIP (  146.71 ms per image patch)
+llama_model_loader: loaded meta data with 22 key-value pairs and 339 tensors from MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = qwen2
+llama_model_loader: - kv   1:                               general.name str              = model
+llama_model_loader: - kv   2:                          qwen2.block_count u32              = 28
+llama_model_loader: - kv   3:                       qwen2.context_length u32              = 32768
+llama_model_loader: - kv   4:                     qwen2.embedding_length u32              = 3584
+llama_model_loader: - kv   5:                  qwen2.feed_forward_length u32              = 18944
+llama_model_loader: - kv   6:                 qwen2.attention.head_count u32              = 28
+llama_model_loader: - kv   7:              qwen2.attention.head_count_kv u32              = 4
+llama_model_loader: - kv   8:                       qwen2.rope.freq_base f32              = 1000000.000000
+llama_model_loader: - kv   9:     qwen2.attention.layer_norm_rms_epsilon f32              = 0.000001
+llama_model_loader: - kv  10:                          general.file_type u32              = 15
+llama_model_loader: - kv  11:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  12:                         tokenizer.ggml.pre str              = qwen2
+llama_model_loader: - kv  13:                      tokenizer.ggml.tokens arr[str,151666]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  14:                  tokenizer.ggml.token_type arr[i32,151666]  = [3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  15:                      tokenizer.ggml.merges arr[str,151387]  = ["Ġ Ġ", "ĠĠ ĠĠ", "i n", "Ġ t",...
+llama_model_loader: - kv  16:                tokenizer.ggml.bos_token_id u32              = 151644
+llama_model_loader: - kv  17:                tokenizer.ggml.eos_token_id u32              = 151645
+llama_model_loader: - kv  18:            tokenizer.ggml.unknown_token_id u32              = 128244
+llama_model_loader: - kv  19:            tokenizer.ggml.padding_token_id u32              = 0
+llama_model_loader: - kv  20:                    tokenizer.chat_template str              = {% for message in messages %}{% if lo...
+llama_model_loader: - kv  21:               general.quantization_version u32              = 2
+llama_model_loader: - type  f32:  141 tensors
+llama_model_loader: - type q4_K:  169 tensors
+llama_model_loader: - type q6_K:   29 tensors
+print_info: file format = GGUF V3 (latest)
+print_info: file type   = Q4_K - Medium
+print_info: file size   = 4.35 GiB (4.91 BPW) 
+load: special tokens cache size = 25
+load: token to piece cache size = 0.9309 MB
+print_info: arch             = qwen2
+print_info: vocab_only       = 0
+print_info: n_ctx_train      = 32768
+print_info: n_embd           = 3584
+print_info: n_layer          = 28
+print_info: n_head           = 28
+print_info: n_head_kv        = 4
+print_info: n_rot            = 128
+print_info: n_swa            = 0
+print_info: n_embd_head_k    = 128
+print_info: n_embd_head_v    = 128
+print_info: n_gqa            = 7
+print_info: n_embd_k_gqa     = 512
+print_info: n_embd_v_gqa     = 512
+print_info: f_norm_eps       = 0.0e+00
+print_info: f_norm_rms_eps   = 1.0e-06
+print_info: f_clamp_kqv      = 0.0e+00
+print_info: f_max_alibi_bias = 0.0e+00
+print_info: f_logit_scale    = 0.0e+00
+print_info: n_ff             = 18944
+print_info: n_expert         = 0
+print_info: n_expert_used    = 0
+print_info: causal attn      = 1
+print_info: pooling type     = 0
+print_info: rope type        = 2
+print_info: rope scaling     = linear
+print_info: freq_base_train  = 1000000.0
+print_info: freq_scale_train = 1
+print_info: n_ctx_orig_yarn  = 32768
+print_info: rope_finetuned   = unknown
+print_info: ssm_d_conv       = 0
+print_info: ssm_d_inner      = 0
+print_info: ssm_d_state      = 0
+print_info: ssm_dt_rank      = 0
+print_info: ssm_dt_b_c_rms   = 0
+print_info: model type       = 7B
+print_info: model params     = 7.61 B
+print_info: general.name     = model
+print_info: vocab type       = BPE
+print_info: n_vocab          = 151666
+print_info: n_merges         = 151387
+print_info: BOS token        = 151644 '<|im_start|>'
+print_info: EOS token        = 151645 '<|im_end|>'
+print_info: EOT token        = 151645 '<|im_end|>'
+print_info: UNK token        = 128244 '<unk>'
+print_info: PAD token        = 0 '!'
+print_info: LF token         = 198 'Ċ'
+print_info: EOG token        = 151643 '<|endoftext|>'
+print_info: EOG token        = 151645 '<|im_end|>'
+print_info: max token length = 256
+load_tensors: loading model tensors, this can take a while... (mmap = true)
+load_tensors:   CPU_Mapped model buffer size =  4458.57 MiB
+....................................................................................
+llama_init_from_model: n_seq_max     = 1
+llama_init_from_model: n_ctx         = 2048
+llama_init_from_model: n_ctx_per_seq = 2048
+llama_init_from_model: n_batch       = 2048
+llama_init_from_model: n_ubatch      = 512
+llama_init_from_model: flash_attn    = 0
+llama_init_from_model: freq_base     = 1000000.0
+llama_init_from_model: freq_scale    = 1
+llama_init_from_model: n_ctx_per_seq (2048) < n_ctx_train (32768) -- the full capacity of the model will not be utilized
+llama_kv_cache_init: kv_size = 2048, offload = 1, type_k = 'f16', type_v = 'f16', n_layer = 28, can_shift = 1
+llama_kv_cache_init:        CPU KV buffer size =   112.00 MiB
+llama_init_from_model: KV self size  =  112.00 MiB, K (f16):   56.00 MiB, V (f16):   56.00 MiB
+llama_init_from_model:        CPU  output buffer size =     0.58 MiB
+llama_init_from_model:        CPU compute buffer size =   303.22 MiB
+llama_init_from_model: graph nodes  = 986
+llama_init_from_model: graph splits = 1
+minicpmv_init: llava init in    70.16 ms.
+process_image: image token past: 0
+process_image: image token past: 469
+minicpmv_init: llama process image in 44977.14 ms.
+<user>Describe what is happening in this frame.
+<assistant>
+The video shows a person practicing fencing in an indoor setting. The individual is standing on a gray mat, wearing casual clothing and holding a fencing foil with both hands. They appear to be performing various movements or exercises related to fencing techniques.
+
+Key details:
+1. **Setting**: An indoor space resembling a gymnasium or training room.
+2. **Person**: Wearing light-colored pants and dark shoes, standing on the mat.
+3. **Equipment**: Holding a foil in both hands.
+4. **Background**: A banner for "Davis Fencing Academy" is visible on the wall.
+
+The person's movements suggest they are practicing fencing techniques or warm-up exercises before engaging in actual fencing practice.
+llama_perf_context_print:        load time =   46894.44 ms
+llama_perf_context_print: prompt eval time =   46346.98 ms /   481 tokens (   96.36 ms per token,    10.38 tokens per second)
+llama_perf_context_print:        eval time =   33725.89 ms /   139 runs   (  242.63 ms per token,     4.12 tokens per second)
+llama_perf_context_print:       total time =   81069.92 ms /   620 tokens
+(venv_py310) ubuntu@ip-172-31-20-21:~/GSX-a1$ 
