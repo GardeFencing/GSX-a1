@@ -559,29 +559,30 @@ class VideoProcessor:
                 # Process frames with retries
                 max_retries = 3
                 retry_count = 0
-                timeout = 120  # Increased timeout
+                timeout = 180  # Increased timeout
                 
                 while retry_count < max_retries:
                     try:
-                        # Construct command
+                        # Construct command using the working format
                         cmd = [
                             self.minicpmv_processor.cli_path,
                             "-m", self.minicpmv_processor.model_path,
                             "--mmproj", self.minicpmv_processor.mmproj_path,
-                            "-t", str(self.minicpmv_processor.n_threads),
-                            "-n", "256",
-                            "--temp", str(self.minicpmv_processor.temp),
-                            "--ctx-size", "8192",
-                            "--top-p", str(self.minicpmv_processor.top_p),
-                            "--top-k", str(self.minicpmv_processor.top_k)
+                            "-t", "4",  # Use 4 threads
+                            "-n", "512",  # Increased token limit
+                            "--temp", "0.2",  # Adjusted temperature
+                            "--ctx-size", "2048",  # Reduced context size
+                            "--top-p", "0.8",
+                            "--top-k", "40",
+                            "--repeat-penalty", "1.1",
+                            "--image"
                         ]
                         
-                        # Add images
-                        for temp_path in temp_paths:
-                            cmd.extend(["--image", temp_path])
+                        # Add only one image at a time
+                        cmd.append(temp_paths[0])  # Process first image
                         
                         # Add query
-                        cmd.extend(["-p", "Describe these frames in sequence, noting any changes or movements between them."])
+                        cmd.extend(["-p", "Describe what is happening in this image."])
                         
                         # Run command with increased timeout
                         result = subprocess.run(
@@ -602,13 +603,8 @@ class VideoProcessor:
                                            'user:', 'assistant:', '<user>', '<assistant>'])
                             )
                             
-                            # Split into individual frame descriptions
-                            frame_captions = response.split('\n')
-                            while len(frame_captions) < len(processed_frames):
-                                frame_captions.append("No specific description available")
-                            frame_captions = frame_captions[:len(processed_frames)]
-                            
-                            return list(zip(processed_frames, frame_captions))
+                            # Return the processed frame and its caption
+                            return [(processed_frames[0], response)]
                             
                         retry_count += 1
                         if retry_count < max_retries:
@@ -782,61 +778,40 @@ def chat():
         if current_frame >= len(video_processor.frames):
             current_frame = len(video_processor.frames) - 1
             
-        # Get current frame and its context
-        frame_context = []
-        start_idx = max(0, current_frame - 2)
-        end_idx = min(len(video_processor.frames), current_frame + 3)
+        # Get current frame
+        frame = video_processor.frames[current_frame]
         
-        # Save frames as temporary images
-        temp_paths = []
+        # Save frame as temporary image
+        temp_path = os.path.join(video_processor.temp_dir, f"chat_frame_{int(time.time() * 1000)}.jpg")
         try:
-            # Get 5 frames around the current frame for context
-            for i in range(start_idx, end_idx):
-                frame = video_processor.frames[i]
-                temp_path = os.path.join(video_processor.temp_dir, f"chat_frame_{int(time.time() * 1000)}_{i}.jpg")
-                success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
-                                    [cv2.IMWRITE_JPEG_QUALITY, 95])
-                if success:
-                    temp_paths.append(temp_path)
+            success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+                                [cv2.IMWRITE_JPEG_QUALITY, 95])
             
-            if not temp_paths:
-                return jsonify({'error': 'Failed to save frames'}), 500
+            if not success:
+                return jsonify({'error': 'Failed to save frame'}), 500
             
-            # Create context-aware prompt
-            context_prompt = f"""You are analyzing frame {current_frame + 1} of {len(video_processor.frames)}.
-            The current frame shows: {video_processor.frame_captions[current_frame]}
-            
-            Previous context: {' '.join(video_processor.frame_captions[start_idx:current_frame])}
-            Next context: {' '.join(video_processor.frame_captions[current_frame + 1:end_idx])}
-            
-            Question: {query}"""
-            
-            # Construct command
+            # Construct command using working format
             cmd = [
                 video_processor.minicpmv_processor.cli_path,
                 "-m", video_processor.minicpmv_processor.model_path,
                 "--mmproj", video_processor.minicpmv_processor.mmproj_path,
-                "-t", str(video_processor.minicpmv_processor.n_threads),
-                "-n", "256",
-                "--temp", str(video_processor.minicpmv_processor.temp),
-                "--ctx-size", "8192",
-                "--top-p", str(video_processor.minicpmv_processor.top_p),
-                "--top-k", str(video_processor.minicpmv_processor.top_k)
+                "-t", "4",  # Use 4 threads
+                "-n", "512",  # Increased token limit
+                "--temp", "0.2",  # Adjusted temperature
+                "--ctx-size", "2048",  # Reduced context size
+                "--top-p", "0.8",
+                "--top-k", "40",
+                "--repeat-penalty", "1.1",
+                "--image", temp_path,
+                "-p", query
             ]
             
-            # Add images
-            for temp_path in temp_paths:
-                cmd.extend(["--image", temp_path])
-            
-            # Add query with context
-            cmd.extend(["-p", context_prompt])
-            
-            # Run command
+            # Run command with increased timeout
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=180,
                 cwd='/home/ubuntu/GSX-a1'
             )
             
@@ -855,13 +830,12 @@ def chat():
                 return jsonify({'error': 'Failed to generate response'}), 500
                 
         finally:
-            # Clean up temp files
-            for temp_path in temp_paths:
-                try:
-                    if os.path.exists(temp_path):
-                        os.remove(temp_path)
-                except:
-                    pass
+            # Clean up temp file
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except:
+                pass
             
     except Exception as e:
         print(f"Error in chat: {str(e)}")
