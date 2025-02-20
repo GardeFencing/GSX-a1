@@ -457,19 +457,16 @@ class MovementAnalyzer:
 # ------------------------------------------------------------------------------
 
 class VideoProcessor:
-    """Process video files and extract frames"""
+    """Process video files and extract frames using VidiQA's approach"""
     _instance = None  # Singleton instance
     
     def __new__(cls):
-        print("Creating new VideoProcessor")
         if cls._instance is None:
-            print("Creating new VideoProcessor instance")
             cls._instance = super(VideoProcessor, cls).__new__(cls)
             cls._instance._initialized = False
         return cls._instance
     
     def __init__(self):
-        print("Initializing VideoProcessor")
         if self._initialized:
             return
             
@@ -477,11 +474,6 @@ class VideoProcessor:
         self.frame_captions = []
         self.processing_complete = False
         
-        # Create temp directory
-        self.temp_dir = os.path.join(os.getcwd(), 'temp_frames')
-        if not os.path.exists(self.temp_dir):
-            os.makedirs(self.temp_dir, exist_ok=True)
-            
         # Initialize paths
         base_dir = os.getcwd()
         self.model_path = os.path.join(base_dir, "MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf")
@@ -495,39 +487,60 @@ class VideoProcessor:
         self._initialized = True
     
     def process_video(self, video_path: str) -> None:
-        """Process video file and extract frames using VidiQA's approach"""
+        """Process video file and extract frames"""
         try:
-            print("\nProcessing video frames...")
+            print("\n" + "="*50)
+            print("Starting video processing...")
+            print("="*50)
             
             # Reset state
             self.frames = []
             self.frame_captions = []
             self.processing_complete = False
             
+            print(f"Video path: {video_path}")
+            print(f"Model path: {self.model_path}")
+            print(f"MMPROJ path: {self.mmproj_path}")
+            print(f"CLI path: {self.cli_path}")
+            
+            # Verify model files exist
+            if not os.path.exists(self.model_path):
+                raise ValueError(f"Model file not found: {self.model_path}")
+            if not os.path.exists(self.mmproj_path):
+                raise ValueError(f"MMPROJ file not found: {self.mmproj_path}")
+            if not os.path.exists(self.cli_path):
+                raise ValueError(f"CLI executable not found: {self.cli_path}")
+            
             # Open video file
             cap = cv2.VideoCapture(video_path)
             if not cap.isOpened():
-                raise ValueError("Failed to open video file")
+                raise ValueError(f"Could not open video file: {video_path}")
             
             # Get video properties
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             fps = int(cap.get(cv2.CAP_PROP_FPS))
-            print(f"Video properties: {total_frames} frames, {fps} fps")
+            print(f"\nVideo properties:")
+            print(f"- Total frames: {total_frames}")
+            print(f"- FPS: {fps}")
             
-            # Calculate frame sampling interval (1/2 fps like VidiQA)
-            sample_interval = max(1, fps // 2)  # Sample at 1/2 fps
+            # Calculate frame sampling interval (1 frame per second)
+            sample_interval = max(1, fps)
             frame_indices = list(range(0, total_frames, sample_interval))
             
-            # Uniformly sample frames if too many (VidiQA's approach)
-            if len(frame_indices) > 15:  # Using 15 as max frames
+            # Uniformly sample frames if too many
+            if len(frame_indices) > 15:
                 gap = len(frame_indices) / 15
                 frame_indices = [int(i * gap + gap / 2) for i in range(15)]
             
-            print(f"Will process {len(frame_indices)} frames")
-            processed_frames = []
+            print(f"\nFrame extraction plan:")
+            print(f"- Will extract {len(frame_indices)} frames")
+            print(f"- Frame indices: {frame_indices}")
             
-            # Extract frames (VidiQA's approach)
-            for frame_idx in frame_indices:
+            # Extract and process frames
+            print("\nStarting frame extraction and processing...")
+            for i, frame_idx in enumerate(frame_indices, 1):
+                print(f"\nProcessing frame {i}/{len(frame_indices)} (index: {frame_idx})")
+                
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
                 ret, frame = cap.read()
                 if not ret:
@@ -537,62 +550,40 @@ class VideoProcessor:
                 # Convert BGR to RGB and resize
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 frame_resized = cv2.resize(frame_rgb, (448, 448))
-                processed_frames.append(frame_resized)
-                print(f"Extracted frame {len(processed_frames)}/{len(frame_indices)}")
-            
-            cap.release()
-            
-            if not processed_frames:
-                raise ValueError("No frames were successfully processed")
-            
-            print(f"\nExtracted {len(processed_frames)} frames")
-            
-            # Process frames in batches of 3 for efficiency
-            processed_captions = []
-            
-            for i in range(0, len(processed_frames), 3):
-                batch_frames = processed_frames[i:i+3]
-                temp_paths = []
+                self.frames.append(frame_resized)
+                print(f"Frame {i} extracted successfully")
                 
+                # Process frame immediately
                 try:
-                    # Save batch frames as temporary images
-                    for j, frame in enumerate(batch_frames):
-                        temp_path = os.path.join(self.temp_dir, f"frame_{i+j}_{int(time.time())}.jpg")
-                        success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-                        if not success:
-                            print(f"Failed to save frame {i+j}")
-                            continue
-                        temp_paths.append(temp_path)
+                    # Save frame to temp file
+                    temp_path = f"/tmp/frame_{int(time.time() * 1000)}.jpg"
+                    success = cv2.imwrite(temp_path, cv2.cvtColor(frame_resized, cv2.COLOR_RGB2BGR))
+                    if not success:
+                        raise ValueError(f"Failed to save temporary frame: {temp_path}")
                     
-                    if not temp_paths:
-                        continue
-                    
-                    # Process batch with optimized parameters
+                    print(f"Running caption generation for frame {i}...")
                     cmd = [
                         self.cli_path,
                         "-m", self.model_path,
                         "--mmproj", self.mmproj_path,
-                        "-t", str(max(1, os.cpu_count() // 2)),  # Optimal thread count
-                        "-n", "512",
+                        "-t", str(max(1, os.cpu_count() // 2)),
+                        "-n", "256",
                         "--temp", "0.1",
-                        "--ctx-size", "8192",
+                        "--ctx-size", "2048",
                         "--top-p", "0.7",
-                        "--top-k", "40"
+                        "--top-k", "40",
+                        "--image", temp_path,
+                        "-p", "Describe what is happening in this frame."
                     ]
                     
-                    # Add images from batch
-                    for path in temp_paths:
-                        cmd.extend(["--image", path])
+                    # Print command for debugging
+                    print(f"Command: {' '.join(cmd)}")
                     
-                    # Add prompt
-                    cmd.extend(["-p", "Describe what is happening in these frames."])
-                    
-                    print(f"Processing frames {i+1}-{i+len(batch_frames)}")
                     result = subprocess.run(
                         cmd,
                         capture_output=True,
                         text=True,
-                        timeout=180,
+                        timeout=60,
                         check=True
                     )
                     
@@ -605,40 +596,56 @@ class VideoProcessor:
                                    'user:', 'assistant:', '<user>', '<assistant>'])
                     )
                     
-                    # Add same caption for all frames in batch
-                    processed_captions.extend([response] * len(batch_frames))
-                    print(f"Successfully processed batch")
+                    if not response:
+                        print(f"Warning: Empty response for frame {i}")
+                        response = "Failed to generate caption"
+                    else:
+                        print(f"Caption generated for frame {i}: {response}")
                     
-                except subprocess.TimeoutExpired as e:
-                    print(f"Batch processing timeout: {str(e)}")
-                    processed_captions.extend(["Failed to process frame"] * len(batch_frames))
-                except subprocess.CalledProcessError as e:
-                    print(f"Batch processing error: {str(e)}")
-                    processed_captions.extend(["Failed to process frame"] * len(batch_frames))
+                    self.frame_captions.append(response)
+                    
                 except Exception as e:
-                    print(f"Unexpected error in batch: {str(e)}")
-                    processed_captions.extend(["Failed to process frame"] * len(batch_frames))
+                    print(f"Error processing frame {i}: {str(e)}")
+                    if 'result' in locals():
+                        print(f"Command output: {result.stdout}")
+                        print(f"Command error: {result.stderr}")
+                    self.frame_captions.append("Failed to process frame")
                 finally:
-                    # Clean up temp files immediately after use
-                    for path in temp_paths:
-                        try:
-                            if os.path.exists(path):
-                                os.remove(path)
-                                print(f"Cleaned up {path}")
-                        except Exception as e:
-                            print(f"Failed to clean up {path}: {str(e)}")
+                    # Clean up temp file
+                    try:
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+                            print(f"Cleaned up temporary file: {temp_path}")
+                    except Exception as e:
+                        print(f"Failed to clean up temp file: {str(e)}")
             
-            # Store results
-            self.frames = processed_frames
-            self.frame_captions = processed_captions
+            cap.release()
+            
+            # Verify processing results
+            print("\nProcessing verification:")
+            print(f"- Frames extracted: {len(self.frames)}")
+            print(f"- Captions generated: {len(self.frame_captions)}")
+            
+            if not self.frames:
+                raise ValueError("No frames were successfully processed")
+            
+            if len(self.frames) != len(self.frame_captions):
+                print("Warning: Mismatch between frames and captions count")
+            
+            # Print all captions for verification
+            print("\nGenerated captions:")
+            for i, caption in enumerate(self.frame_captions, 1):
+                print(f"Frame {i}: {caption}")
+            
             self.processing_complete = True
-            
-            print(f"\nVideo processing completed successfully!")
-            print(f"Total frames processed: {len(self.frames)}")
-            print(f"Total captions generated: {len(self.frame_captions)}")
+            print("\n" + "="*50)
+            print("Video processing completed successfully!")
+            print("="*50)
             
         except Exception as e:
-            print(f"\nError in process_video: {str(e)}")
+            print("\n" + "="*50)
+            print(f"Error in process_video: {str(e)}")
+            print("="*50)
             self.processing_complete = False
             raise
 
