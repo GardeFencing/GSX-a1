@@ -435,6 +435,14 @@ class VideoProcessor:
         self.frames = []
         self.frame_captions = []
         
+        # Initialize MiniCPMV processor
+        try:
+            self.minicpmv_processor = MiniCPMVProcessor()
+            print("MiniCPMV processor initialized successfully")
+        except Exception as e:
+            print(f"Error initializing MiniCPMV processor: {str(e)}")
+            raise
+        
         # Enhanced batch processing settings
         self.batch_size = 8
         self.max_retries = 1
@@ -473,7 +481,7 @@ class VideoProcessor:
             frame_resized = cv2.resize(frame_rgb, (448, 448))
             
             return frame_resized
-            
+                
         except Exception as e:
             print(f"\rError in frame preprocessing: {str(e)}", flush=True)
             return None
@@ -547,7 +555,7 @@ class VideoProcessor:
                         os.remove(temp_path)
                     except:
                         pass
-                    
+                        
                 except Exception as e:
                     print(f"\nError processing frame {frame_idx}: {str(e)}")
                     continue
