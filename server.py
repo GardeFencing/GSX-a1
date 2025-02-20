@@ -1,6 +1,12 @@
 from gevent import monkey
 monkey.patch_all()
 
+from dotenv import load_dotenv
+import os
+
+# Load environment variables
+load_dotenv()
+
 from flask import Flask
 from web_app import app
 from config import Config
