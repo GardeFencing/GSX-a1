@@ -457,7 +457,7 @@ class MovementAnalyzer:
 # ------------------------------------------------------------------------------
 
 class VideoProcessor:
-    """Process video files and extract frames using VidiQA's approach"""
+    """Process video files and extract frames using MiniCPM-V's approach"""
     _instance = None  # Singleton instance
     
     def __new__(cls):
@@ -498,18 +498,15 @@ class VideoProcessor:
             self.frame_captions = []
             self.processing_complete = False
             
+            # Verify paths
             print(f"Video path: {video_path}")
             print(f"Model path: {self.model_path}")
             print(f"MMPROJ path: {self.mmproj_path}")
             print(f"CLI path: {self.cli_path}")
             
-            # Verify model files exist
-            if not os.path.exists(self.model_path):
-                raise ValueError(f"Model file not found: {self.model_path}")
-            if not os.path.exists(self.mmproj_path):
-                raise ValueError(f"MMPROJ file not found: {self.mmproj_path}")
-            if not os.path.exists(self.cli_path):
-                raise ValueError(f"CLI executable not found: {self.cli_path}")
+            for path in [self.model_path, self.mmproj_path, self.cli_path]:
+                if not os.path.exists(path):
+                    raise ValueError(f"Required file not found: {path}")
             
             # Open video file
             cap = cv2.VideoCapture(video_path)
@@ -523,123 +520,128 @@ class VideoProcessor:
             print(f"- Total frames: {total_frames}")
             print(f"- FPS: {fps}")
             
-            # Calculate frame sampling interval (1 frame per second)
-            sample_interval = max(1, fps)
-            frame_indices = list(range(0, total_frames, sample_interval))
-            
-            # Uniformly sample frames if too many
-            if len(frame_indices) > 15:
-                gap = len(frame_indices) / 15
-                frame_indices = [int(i * gap + gap / 2) for i in range(15)]
+            # Calculate frame interval (match C++ implementation)
+            frame_interval = fps  # 1 frame per second
+            frame_len = total_frames / frame_interval
+            if frame_len > 15:  # Max 15 frames like C++ code
+                frame_interval = total_frames // 15
             
             print(f"\nFrame extraction plan:")
-            print(f"- Will extract {len(frame_indices)} frames")
-            print(f"- Frame indices: {frame_indices}")
+            print(f"- Frame interval: {frame_interval}")
+            print(f"- Expected frames: {min(15, frame_len)}")
             
-            # Extract and process frames
-            print("\nStarting frame extraction and processing...")
-            for i, frame_idx in enumerate(frame_indices, 1):
-                print(f"\nProcessing frame {i}/{len(frame_indices)} (index: {frame_idx})")
-                
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            # Extract frames
+            print("\nExtracting frames...")
+            frame_count = 0
+            last_frame_time = None
+            
+            while True:
                 ret, frame = cap.read()
                 if not ret:
-                    print(f"Failed to read frame {frame_idx}")
-                    continue
+                    break
                 
-                # Convert BGR to RGB and resize
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame_resized = cv2.resize(frame_rgb, (448, 448))
-                self.frames.append(frame_resized)
-                print(f"Frame {i} extracted successfully")
+                current_time = frame_count / fps
+                if last_frame_time is None or (current_time - last_frame_time) >= 1.0:
+                    # Convert BGR to RGB
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    self.frames.append(frame_rgb)
+                    last_frame_time = current_time
+                    print(f"Extracted frame {len(self.frames)} at time {current_time:.2f}s")
+                    
+                    if len(self.frames) >= 15:  # Max 15 frames
+                        break
                 
-                # Process frame immediately
-                try:
-                    # Save frame to temp file
-                    temp_path = f"/tmp/frame_{int(time.time() * 1000)}.jpg"
-                    success = cv2.imwrite(temp_path, cv2.cvtColor(frame_resized, cv2.COLOR_RGB2BGR))
+                frame_count += 1
+            
+            cap.release()
+            print(f"\nExtracted {len(self.frames)} frames")
+            
+            # Process all frames in a single command
+            print("\nProcessing frames with MiniCPM-V...")
+            temp_paths = []
+            
+            try:
+                # Save frames as temporary files
+                for i, frame in enumerate(self.frames):
+                    temp_path = f"/tmp/frame_{int(time.time() * 1000)}_{i}.jpg"
+                    success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                     if not success:
-                        raise ValueError(f"Failed to save temporary frame: {temp_path}")
-                    
-                    print(f"Running caption generation for frame {i}...")
-                    cmd = [
-                        self.cli_path,
-                        "-m", self.model_path,
-                        "--mmproj", self.mmproj_path,
-                        "-t", str(max(1, os.cpu_count() // 2)),
-                        "-n", "256",
-                        "--temp", "0.1",
-                        "--ctx-size", "2048",
-                        "--top-p", "0.7",
-                        "--top-k", "40",
-                        "--image", temp_path,
-                        "-p", "Describe what is happening in this frame."
-                    ]
-                    
-                    # Print command for debugging
-                    print(f"Command: {' '.join(cmd)}")
-                    
-                    result = subprocess.run(
-                        cmd,
-                        capture_output=True,
-                        text=True,
-                        timeout=60,
-                        check=True
-                    )
-                    
-                    # Process output
-                    response = ' '.join(
-                        line.strip() for line in result.stdout.split('\n')
-                        if line.strip()
-                        and not any(x in line.lower() for x in
-                                  ['loading', 'llama_print', 'log start', 'clip_model',
-                                   'user:', 'assistant:', '<user>', '<assistant>'])
-                    )
-                    
-                    if not response:
-                        print(f"Warning: Empty response for frame {i}")
-                        response = "Failed to generate caption"
-                    else:
-                        print(f"Caption generated for frame {i}: {response}")
-                    
-                    self.frame_captions.append(response)
-                    
-                except Exception as e:
-                    print(f"Error processing frame {i}: {str(e)}")
-                    if 'result' in locals():
-                        print(f"Command output: {result.stdout}")
-                        print(f"Command error: {result.stderr}")
-                    self.frame_captions.append("Failed to process frame")
-                finally:
-                    # Clean up temp file
+                        print(f"Warning: Failed to save frame {i}")
+                        continue
+                    temp_paths.append(temp_path)
+                
+                # Construct command for all frames
+                cmd = [
+                    self.cli_path,
+                    "-m", self.model_path,
+                    "--mmproj", self.mmproj_path,
+                    "-t", "4",  # Fixed thread count
+                    "-n", "256",
+                    "--temp", "0.1",
+                    "--ctx-size", "8192",  # Increased for multiple frames
+                    "--top-p", "0.7",
+                    "--top-k", "40"
+                ]
+                
+                # Add all images
+                for temp_path in temp_paths:
+                    cmd.extend(["--image", temp_path])
+                
+                # Add prompt
+                cmd.extend(["-p", "Describe what is happening in these frames."])
+                
+                print("Running command:", " ".join(cmd))
+                
+                # Run command
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=180,  # 3 minutes for all frames
+                    check=True
+                )
+                
+                # Process output
+                response = ' '.join(
+                    line.strip() for line in result.stdout.split('\n')
+                    if line.strip()
+                    and not any(x in line.lower() for x in
+                              ['loading', 'llama_print', 'log start', 'clip_model',
+                               'user:', 'assistant:', '<user>', '<assistant>'])
+                )
+                
+                if response:
+                    print("\nGenerated caption:", response)
+                    self.frame_captions = [response] * len(self.frames)  # Same caption for all frames
+                else:
+                    print("\nWarning: No caption generated")
+                    self.frame_captions = ["No caption generated"] * len(self.frames)
+                
+            except subprocess.TimeoutExpired:
+                print("\nError: Command timed out")
+                self.frame_captions = ["Timeout error"] * len(self.frames)
+            except subprocess.CalledProcessError as e:
+                print(f"\nError: Command failed: {e.stderr}")
+                self.frame_captions = ["Processing error"] * len(self.frames)
+            except Exception as e:
+                print(f"\nUnexpected error: {str(e)}")
+                self.frame_captions = ["Processing error"] * len(self.frames)
+            finally:
+                # Clean up temp files
+                for temp_path in temp_paths:
                     try:
                         if os.path.exists(temp_path):
                             os.remove(temp_path)
-                            print(f"Cleaned up temporary file: {temp_path}")
                     except Exception as e:
-                        print(f"Failed to clean up temp file: {str(e)}")
+                        print(f"Failed to clean up {temp_path}: {str(e)}")
             
-            cap.release()
-            
-            # Verify processing results
-            print("\nProcessing verification:")
-            print(f"- Frames extracted: {len(self.frames)}")
-            print(f"- Captions generated: {len(self.frame_captions)}")
-            
-            if not self.frames:
-                raise ValueError("No frames were successfully processed")
-            
-            if len(self.frames) != len(self.frame_captions):
-                print("Warning: Mismatch between frames and captions count")
-            
-            # Print all captions for verification
-            print("\nGenerated captions:")
-            for i, caption in enumerate(self.frame_captions, 1):
-                print(f"Frame {i}: {caption}")
+            if len(self.frames) == 0:
+                raise ValueError("No frames were extracted")
             
             self.processing_complete = True
             print("\n" + "="*50)
-            print("Video processing completed successfully!")
+            print("Video processing completed!")
+            print(f"Total frames: {len(self.frames)}")
             print("="*50)
             
         except Exception as e:
