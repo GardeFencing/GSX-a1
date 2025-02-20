@@ -151,7 +151,7 @@ class MiniCPMVProcessor:
                         cmd, 
                         capture_output=True, 
                         text=True, 
-                        timeout=60,  # Increased timeout for multi-image
+                        timeout=180,  # Increased from 60 to 180 seconds (3 minutes) per frame
                         cwd=os.getcwd()
                     )
                     
@@ -543,12 +543,12 @@ class VideoProcessor:
             print("\nExtracting frames...")
             for frame_idx in frame_indices:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                
-                # Convert BGR to RGB
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                        
+                            # Convert BGR to RGB
+                            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 self.frames.append(frame_rgb)
                 print(f"Extracted frame {len(self.frames)} at time {frame_idx/fps:.2f}s")
             
@@ -616,8 +616,8 @@ class VideoProcessor:
                         error_msg = f"Command failed with code {result.returncode}"
                         logger.error(f"{error_msg} for frame {i+1}")
                         self.frame_captions.append(f"Error: {error_msg}")
-                        continue
-                    
+                            continue
+                            
                     # Process output only if command succeeded
                     response = None
                     try:
@@ -639,8 +639,8 @@ class VideoProcessor:
                                 response_lines.append(line)
                         
                         response = ' '.join(response_lines).strip()
-                        
-                    except Exception as e:
+            
+        except Exception as e:
                         logger.error(f"Error processing output for frame {i+1}: {str(e)}")
                     
                     if response:
@@ -713,7 +713,7 @@ def upload_video():
             # Initialize video processing if not already initialized
             if video_processor is None:
                 logger.info("Initializing video processor")
-                video_processor = VideoProcessor()
+            video_processor = VideoProcessor()
             
             # Process video and wait for completion
             logger.info("Starting video processing")
@@ -722,10 +722,10 @@ def upload_video():
             # Only return success if processing is complete
             if video_processor.processing_complete:
                 logger.info(f"Video processing complete. Total frames: {len(video_processor.frames)}")
-                return jsonify({
-                    'message': 'Video processed successfully',
-                    'total_frames': len(video_processor.frames)
-                })
+            return jsonify({
+                'message': 'Video processed successfully',
+                'total_frames': len(video_processor.frames)
+            })
             else:
                 logger.error("Video processing incomplete")
                 return jsonify({'error': 'Video processing incomplete'}), 500
@@ -807,7 +807,7 @@ def chat():
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=180,  # Increased from 60 to 180 seconds (3 minutes) per frame
                 check=False  # Don't raise on non-zero exit
             )
             
@@ -848,8 +848,8 @@ def chat():
                 
                 logger.info(f"Generated response: {response}")
                 return jsonify({'response': response})
-                
-            except Exception as e:
+                        
+                except Exception as e:
                 logger.error(f"Error processing model output: {str(e)}", exc_info=True)
                 return jsonify({'error': 'Failed to process model output'}), 500
                 
@@ -865,7 +865,7 @@ def chat():
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
                     logger.info(f"Cleaned up temp file: {temp_path}")
-            except Exception as e:
+    except Exception as e:
                 logger.error(f"Failed to clean up temp file: {str(e)}")
             
     except Exception as e:
