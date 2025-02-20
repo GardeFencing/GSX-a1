@@ -71,7 +71,7 @@ class MiniCPMVProcessor:
                  mmproj_path: str = "MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf"):
         self.model_path = model_path
         self.mmproj_path = mmproj_path
-        self.cli_path = "./llama.cpp/llama-minicpmv-cli"
+        self.cli_path = "/home/ubuntu/GSX-a1/llama.cpp/build/bin/llama-minicpmv-cli"
         
         # Optimized parameters
         self.temp = 0.1
@@ -578,6 +578,7 @@ class VideoProcessor:
 
 @app.route('/')
 def index():
+    """Render the main page"""
     return render_template('index.html')
 
 @app.route('/upload', methods=['POST'])
