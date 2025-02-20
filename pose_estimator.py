@@ -19,13 +19,12 @@ class JointAngles:
 class PoseEstimator:
     """Estimate poses from video frames for fencing analysis"""
     def __init__(self):
-        # Initialize OpenCV's DNN module with COCO model
-        self.net = cv2.dnn.readNetFromCaffe(
-            "models/pose/pose_deploy.prototxt",
-            "models/pose/pose_iter_584000.caffemodel"
-        )
+        # Initialize OpenCV's DNN module with MobileNet
+        self.inWidth = 368
+        self.inHeight = 368
+        self.threshold = 0.1
         
-        # Define body parts
+        # Define body parts for MobileNet
         self.BODY_PARTS = {
             "Nose": 0, "Neck": 1,
             "RShoulder": 2, "RElbow": 3, "RWrist": 4,
@@ -47,7 +46,7 @@ class PoseEstimator:
     
     def estimate_pose(self, frame: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[JointAngles]]:
         """
-        Estimate pose from a video frame
+        Estimate pose from a video frame using OpenCV's DNN module
         
         Args:
             frame (np.ndarray): Input video frame
@@ -57,25 +56,24 @@ class PoseEstimator:
                 Detected keypoints and calculated joint angles
         """
         try:
-            # Prepare input
-            input_height, input_width = 368, 368
             frame_height, frame_width = frame.shape[:2]
             
-            # Create blob from image
-            input_blob = cv2.dnn.blobFromImage(
-                frame, 1.0 / 255,
-                (input_width, input_height),
-                (0, 0, 0), swapRB=False, crop=False
-            )
+            # Use OpenCV's pose detection
+            net = cv2.dnn.readNetFromTensorflow("models/pose/graph_opt.pb")
+            
+            # Prepare input blob
+            blob = cv2.dnn.blobFromImage(frame, 1.0, (self.inWidth, self.inHeight),
+                                       (127.5, 127.5, 127.5), swapRB=True, crop=False)
+            net.setInput(blob)
             
             # Forward pass
-            self.net.setInput(input_blob)
-            output = self.net.forward()
+            output = net.forward()
+            output = output[:, :14, :, :]  # First 14 keypoints
             
             # Extract keypoints
             keypoints = []
-            for i in range(len(self.BODY_PARTS)):
-                # Get heatmap
+            for i in range(14):  # Process first 14 keypoints
+                # Get confidence map
                 prob_map = output[0, i, :, :]
                 prob_map = cv2.resize(prob_map, (frame_width, frame_height))
                 
@@ -83,7 +81,7 @@ class PoseEstimator:
                 _, confidence, _, point = cv2.minMaxLoc(prob_map)
                 
                 # Add keypoint if confidence is high enough
-                if confidence > 0.1:
+                if confidence > self.threshold:
                     keypoints.append(point)
                 else:
                     keypoints.append(None)

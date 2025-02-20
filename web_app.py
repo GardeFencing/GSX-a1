@@ -73,7 +73,7 @@ class MiniCPMVProcessor:
         self.mmproj_path = mmproj_path
         self.cli_path = "./llama.cpp/llama-minicpmv-cli"
         
-        # Optimized parameters for Mac CPU
+        # Optimized parameters
         self.temp = 0.1
         self.top_p = 0.7
         self.top_k = 40
@@ -430,15 +430,10 @@ class MovementAnalyzer:
 # ------------------------------------------------------------------------------
 
 class VideoProcessor:
-    """Process video files and extract frames with pose estimation"""
+    """Process video files and extract frames"""
     def __init__(self):
-        self.pose_estimator = PoseEstimator()
         self.frames = []
-        self.frame_angles = []
         self.frame_captions = []
-        self.biomech_analyzer = BiomechanicalAnalyzer()
-        self.movement_analyzer = MovementAnalyzer()
-        self.minicpmv_processor = MiniCPMVProcessor()
         
         # Enhanced batch processing settings
         self.batch_size = 8
@@ -468,97 +463,23 @@ class VideoProcessor:
         except:
             pass
     
-    def _preprocess_frame(self, frame: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[JointAngles]]:
-        """Preprocess a single frame with pose estimation"""
+    def _preprocess_frame(self, frame: np.ndarray) -> np.ndarray:
+        """Preprocess a single frame"""
         try:
             # Convert BGR to RGB
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             
-            # Get pose estimation
-            keypoints, angles = self.pose_estimator.estimate_pose(frame_rgb)
-            
-            # Draw pose on frame if keypoints exist
-            if keypoints is not None and angles is not None:
-                annotated_frame = frame_rgb.copy()
-                annotated_frame = self.pose_estimator.draw_pose(annotated_frame, keypoints, angles)
-            else:
-                annotated_frame = frame_rgb
-            
             # Resize frame for MiniCPM-V
-            annotated_frame = cv2.resize(annotated_frame, (448, 448))
+            frame_resized = cv2.resize(frame_rgb, (448, 448))
             
-            return annotated_frame, angles
+            return frame_resized
             
         except Exception as e:
             print(f"\rError in frame preprocessing: {str(e)}", flush=True)
-            return None, None
-    
-    def _process_and_store_batch(self, batch_frames: List[np.ndarray], 
-                               frame_info: List[Tuple[int, Any]]) -> None:
-        """Process a batch of frames and store results"""
-        try:
-            # Process batch with MiniCPM-V
-            for frame_idx, (frame, angles) in enumerate(zip(batch_frames, [info[1] for info in frame_info])):
-                try:
-                    # Show progress
-                    print(f"\nProcessing frame {frame_idx + 1}/83 ", end="", flush=True)
-                    
-                    # Save frame to temp file
-                    temp_path = self._get_temp_path(frame_idx)
-                    success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
-                                        [cv2.IMWRITE_JPEG_QUALITY, 80])
-                    
-                    if not success:
-                        print(f"✗ Failed to save frame to {temp_path}")
-                        continue
-                    
-                    # Read and verify the saved frame
-                    frame_img = cv2.imread(temp_path)
-                    if frame_img is None:
-                        print(f"✗ Failed to read saved frame from {temp_path}")
-                        continue
-                    
-                    # Process frame
-                    caption = self.minicpmv_processor.process_frame(
-                        frame_img,
-                        "Describe this image briefly."
-                    )
-                    
-                    # Store results if caption generation was successful
-                    if caption and not caption.startswith("Error:"):
-                        print(f" ✓ Caption: {caption}")
-                        self.frames.append(frame)
-                        self.frame_angles.append(angles)
-                        self.frame_captions.append(caption)
-                    else:
-                        print(f"✗ Failed to generate caption: {caption}")
-                    
-                    # Clean up temp file
-                    try:
-                        os.remove(temp_path)
-                    except:
-                        pass
-                    
-                    # Add delay between frames
-                    time.sleep(1)
-                    
-                except Exception as e:
-                    print(f"\nError processing frame {frame_idx + 1}: {str(e)}")
-                
-            # Print batch summary
-            print(f"\nBatch summary:")
-            print(f"Total frames processed: {len(self.frames)}")
-            print(f"Total captions generated: {len(self.frame_captions)}")
-            print(f"Remaining frames: {83 - len(self.frames)}")
-                
-        except Exception as e:
-            print(f"\nError processing batch: {str(e)}")
-        finally:
-            # Clean up all temp files
-            self._cleanup_temp_files()
+            return None
     
     def process_video(self, video_path: str, target_fps: int = 5) -> None:
-        """Process video file and extract frames with pose estimation using parallel batch processing"""
+        """Process video file and extract frames"""
         try:
             print("\nProcessing video frames...")
             
@@ -578,62 +499,58 @@ class VideoProcessor:
             
             # Initialize lists
             self.frames = []
-            self.frame_angles = []
             self.frame_captions = []
             
-            # Create batches for parallel processing
-            batch_size = min(8, total_frames_to_process)  # Process 8 frames at a time
-            frame_batches = [frame_indices[i:i + batch_size] for i in range(0, len(frame_indices), batch_size)]
-            
-            # Process batches with ThreadPoolExecutor
-            with ThreadPoolExecutor(max_workers=min(4, len(frame_batches))) as executor:
-                futures = []
-                
-                for batch_idx, batch_indices in enumerate(frame_batches):
-                    batch_frames = []
-                    batch_info = []
+            # Process frames
+            for frame_idx in frame_indices:
+                try:
+                    # Read frame
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                    ret, frame = cap.read()
+                    if not ret:
+                        continue
                     
-                    # Read frames for this batch
-                    for frame_idx in batch_indices:
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                        ret, frame = cap.read()
-                        if ret:
-                            # Preprocess frame
-                            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                            keypoints, angles = self.pose_estimator.estimate_pose(frame_rgb)
-                            
-                            # Draw pose if available
-                            if keypoints is not None and angles is not None:
-                                annotated_frame = frame_rgb.copy()
-                                annotated_frame = self.pose_estimator.draw_pose(annotated_frame, keypoints, angles)
-                            else:
-                                annotated_frame = frame_rgb
-                                angles = JointAngles()
-                            
-                            # Resize frame
-                            frame_resized = cv2.resize(annotated_frame, (448, 448))
-                            batch_frames.append(frame_resized)
-                            batch_info.append((frame_idx, angles))
+                    # Preprocess frame
+                    frame_processed = self._preprocess_frame(frame)
+                    if frame_processed is None:
+                        continue
                     
-                    # Submit batch for processing
-                    if batch_frames:
-                        future = executor.submit(
-                            self._process_batch,
-                            batch_frames,
-                            batch_info,
-                            batch_idx,
-                            len(frame_batches)
-                        )
-                        futures.append(future)
-                
-                # Process results as they complete
-                for future in futures:
-                    batch_results = future.result()
-                    if batch_results:
-                        frames, angles, captions = batch_results
-                        self.frames.extend(frames)
-                        self.frame_angles.extend(angles)
-                        self.frame_captions.extend(captions)
+                    # Save frame to temp file
+                    temp_path = self._get_temp_path(frame_idx)
+                    success = cv2.imwrite(temp_path, cv2.cvtColor(frame_processed, cv2.COLOR_RGB2BGR),
+                                        [cv2.IMWRITE_JPEG_QUALITY, 95])
+                    
+                    if not success:
+                        print(f"✗ Failed to save frame to {temp_path}")
+                        continue
+                    
+                    # Process frame with MiniCPM-V
+                    frame_img = cv2.imread(temp_path)
+                    if frame_img is None:
+                        print(f"✗ Failed to read saved frame from {temp_path}")
+                        continue
+                    
+                    # Generate caption
+                    caption = self.minicpmv_processor.process_frame(
+                        frame_img,
+                        "Describe this image briefly."
+                    )
+                    
+                    # Store results if successful
+                    if caption and not caption.startswith("Error:"):
+                        print(f"\rProcessed frame {len(self.frames) + 1}/{total_frames_to_process} ✓", end="", flush=True)
+                        self.frames.append(frame_processed)
+                        self.frame_captions.append(caption)
+                    
+                    # Clean up temp file
+                    try:
+                        os.remove(temp_path)
+                    except:
+                        pass
+                    
+                except Exception as e:
+                    print(f"\nError processing frame {frame_idx}: {str(e)}")
+                    continue
             
             cap.release()
             print("\nVideo processing completed!")
@@ -646,59 +563,6 @@ class VideoProcessor:
             raise
         finally:
             self._cleanup_temp_files()
-    
-    def _process_batch(self, batch_frames: List[np.ndarray], 
-                      batch_info: List[Tuple[int, JointAngles]], 
-                      batch_idx: int,
-                      total_batches: int) -> Optional[Tuple[List, List, List]]:
-        """Process a batch of frames in parallel"""
-        try:
-            processed_frames = []
-            processed_angles = []
-            processed_captions = []
-            
-            # Process each frame in the batch
-            for i, (frame, (frame_idx, angles)) in enumerate(zip(batch_frames, batch_info)):
-                try:
-                    # Save frame as temporary image
-                    temp_path = self._get_temp_path(frame_idx)
-                    success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
-                                        [cv2.IMWRITE_JPEG_QUALITY, 95])
-                    
-                    if not success:
-                        continue
-                    
-                    # Generate caption
-                    caption = self.minicpmv_processor.process_frame(frame)
-                    
-                    # Store results if successful
-                    if not caption.startswith("Error:"):
-                        progress = ((batch_idx * len(batch_frames) + i + 1) / (total_batches * len(batch_frames))) * 100
-                        print(f"\n ✓ Batch {batch_idx + 1}/{total_batches} - Frame {i + 1}/{len(batch_frames)} ({progress:.1f}%)")
-                        print("   Caption: " + caption.replace("\n", "\n            "))
-                        print("-" * 80)
-                        
-                        processed_frames.append(frame)
-                        processed_angles.append(angles)
-                        processed_captions.append(caption)
-                    
-                except Exception as e:
-                    print(f"\nError processing frame in batch {batch_idx + 1}, frame {i + 1}: {str(e)}")
-                    continue
-                
-                finally:
-                    # Clean up temp file
-                    try:
-                        if os.path.exists(temp_path):
-                            os.remove(temp_path)
-                    except:
-                        pass
-            
-            return processed_frames, processed_angles, processed_captions
-            
-        except Exception as e:
-            print(f"\nError processing batch {batch_idx + 1}: {str(e)}")
-            return None
 
 # ------------------------------------------------------------------------------
 # ROUTES
@@ -755,41 +619,12 @@ def chat():
         query = data['query'].lower()
         current_frame = data.get('current_frame', 0)
         
-        # Get frame window for analysis
-        frame_window = []
-        start_idx = max(0, current_frame - 5)
-        for idx in range(start_idx, current_frame + 1):
-            frame_data = {
-                'angles': {
-                    'sword_arm': video_processor.frame_angles[idx].sword_arm_angle,
-                    'front_knee': video_processor.frame_angles[idx].front_knee_angle,
-                    'back_knee': video_processor.frame_angles[idx].back_knee_angle,
-                    'torso': video_processor.frame_angles[idx].torso_angle
-                }
-            }
-            frame_window.append(frame_data)
-        
-        # Perform movement sequence analysis
-        sequence_analysis = video_processor.movement_analyzer.analyze_sequence(frame_window)
-        
-        # Perform biomechanical analysis
-        biomech_analysis = video_processor.biomech_analyzer.analyze_movement(frame_window[-1])
-        
-        # Create context for MiniCPM-V
-        context = f"""This is a fencing video analysis.
-Current movement: {sequence_analysis['sequence']} - {sequence_analysis['phase']}
-Technical metrics:
-- Power Generation: {biomech_analysis.power_generation:.2f}
-- Balance Control: {biomech_analysis.balance_control:.2f}
-- Movement Efficiency: {biomech_analysis.movement_efficiency:.2f}
-- Coordination: {biomech_analysis.coordination:.2f}
-- Overall Mastery: {biomech_analysis.technical_mastery:.2f}
-
-Question: {query}"""
-        
         # Get current frame and process with MiniCPM-V
         current_frame_img = video_processor.frames[current_frame]
-        response = video_processor.minicpmv_processor.process_frame(current_frame_img, context)
+        response = video_processor.minicpmv_processor.process_frame(
+            current_frame_img,
+            f"Question about the video frame: {query}"
+        )
         
         return jsonify({'response': response})
             
