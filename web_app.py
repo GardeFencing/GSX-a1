@@ -506,7 +506,7 @@ class VideoProcessor:
             
         # Initialize model and tokenizer
         try:
-            from model import load_model_and_tokenizer
+            from src.app.model import load_model_and_tokenizer
             self.model, self.tokenizer = load_model_and_tokenizer()
             print("Model and tokenizer initialized successfully")
             self._initialized = True
@@ -551,7 +551,7 @@ class VideoProcessor:
             ]
             
             # Generate captions using multi-image inference
-            from model import generate_response
+            from src.app.model import generate_response
             captions = generate_response(
                 self.model,
                 self.tokenizer,
@@ -784,7 +784,7 @@ def chat():
                 })
         
         # Generate response using multi-image inference
-        from model import generate_response
+        from src.app.model import generate_response
         response = generate_response(
             video_processor.model,
             video_processor.tokenizer,
