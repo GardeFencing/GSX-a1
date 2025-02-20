@@ -477,124 +477,22 @@ class VideoProcessor:
         self.frame_captions = []
         self.processing_complete = False
         
-        # Reduced batch size and workers for better stability
-        self.batch_size = 4  # Reduced from 16
-        self.max_workers = min(4, (os.cpu_count() or 1))  # Reduced from 32
-        self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
-        
         # Create temp directory
-        self.temp_dir = os.path.join('/home/ubuntu/GSX-a1', 'temp_frames')
+        self.temp_dir = os.path.join(os.getcwd(), 'temp_frames')
         if not os.path.exists(self.temp_dir):
             os.makedirs(self.temp_dir, exist_ok=True)
             
-        # Initialize MiniCPMV processor
-        try:
-            self.minicpmv_processor = MiniCPMVProcessor()
-            print("MiniCPMV processor initialized successfully")
-            self._initialized = True
-        except Exception as e:
-            print(f"Error initializing MiniCPMV processor: {str(e)}")
-            raise
-    
-    def _get_temp_path(self, frame_idx: int, retry_count: int = 0) -> str:
-        """Get path for temporary frame file"""
-        return os.path.join(self.temp_dir, f"frame_{frame_idx}_{retry_count}.jpg")
-    
-    def _cleanup_temp_files(self):
-        """Clean up temporary files"""
-        try:
-            for file in os.listdir(self.temp_dir):
-                if file.endswith('.jpg'):
-                    try:
-                        os.remove(os.path.join(self.temp_dir, file))
-                    except:
-                        pass
-        except:
-            pass
-    
-    def _preprocess_frame(self, frame: np.ndarray) -> np.ndarray:
-        """Preprocess a single frame"""
-        try:
-            # Convert BGR to RGB
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Resize frame for MiniCPM-V
-            frame_resized = cv2.resize(frame_rgb, (448, 448))
-            
-            return frame_resized
-                
-        except Exception as e:
-            print(f"\rError in frame preprocessing: {str(e)}", flush=True)
-            return None
-
-    def _process_frame_batch(self, frames_data):
-        """Process a batch of frames in parallel"""
-        try:
-            # Process one frame at a time using the working command format
-            processed_frames = []
-            frame_indices = []
-            
-            for frame, frame_idx in frames_data:
-                frame_processed = self._preprocess_frame(frame)
-                if frame_processed is not None:
-                    # Save frame as temporary image
-                    temp_path = os.path.join(self.temp_dir, f"temp_frame_{int(time.time() * 1000)}.jpg")
-                    success = cv2.imwrite(temp_path, cv2.cvtColor(frame_processed, cv2.COLOR_RGB2BGR),
-                                        [cv2.IMWRITE_JPEG_QUALITY, 95])
-                    
-                    if not success:
-                        continue
-                    
-                    try:
-                        # Use exact working command format
-                        cmd = [
-                            self.minicpmv_processor.cli_path,
-                            "-m", self.minicpmv_processor.model_path,
-                            "--mmproj", self.minicpmv_processor.mmproj_path,
-                            "-t", "4",
-                            "-n", "256",
-                            "--temp", "0.1",
-                            "--ctx-size", "8192",
-                            "--top-p", "0.7",
-                            "--top-k", "40",
-                            "--image", temp_path,
-                            "-p", "What's in this image?"
-                        ]
-                        
-                        result = subprocess.run(
-                            cmd,
-                            capture_output=True,
-                            text=True,
-                            timeout=60,
-                            cwd='/home/ubuntu/GSX-a1'
-                        )
-                        
-                        if result.returncode == 0 and result.stdout:
-                            # Clean up the response
-                            response = ' '.join(
-                                line.strip() for line in result.stdout.split('\n')
-                                if line.strip()
-                                and not any(x in line.lower() for x in
-                                          ['loading', 'llama_print', 'log start', 'clip_model',
-                                           'user:', 'assistant:', '<user>', '<assistant>'])
-                            )
-                            
-                            processed_frames.append((frame_processed, response))
-                            frame_indices.append(frame_idx)
-                            
-                    finally:
-                        # Clean up temp file
-                        try:
-                            if os.path.exists(temp_path):
-                                os.remove(temp_path)
-                        except:
-                            pass
-            
-            return processed_frames
-            
-        except Exception as e:
-            print(f"\nError processing batch: {str(e)}")
-            return []
+        # Initialize paths
+        base_dir = os.getcwd()
+        self.model_path = os.path.join(base_dir, "MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf")
+        self.mmproj_path = os.path.join(base_dir, "MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf")
+        self.cli_path = os.path.join(base_dir, "llama.cpp/build/bin/llama-minicpmv-cli")
+        
+        print(f"Model path: {self.model_path}")
+        print(f"MMPROJ path: {self.mmproj_path}")
+        print(f"CLI path: {self.cli_path}")
+        
+        self._initialized = True
     
     def process_video(self, video_path: str, target_fps: int = 1) -> None:
         """Process video file and extract frames"""
@@ -619,15 +517,15 @@ class VideoProcessor:
             sample_interval = max(1, int(fps))
             frame_indices = list(range(0, total_frames, sample_interval))
             
-            # Uniformly sample frames if too many
-            if len(frame_indices) > 32:  # Max frames to process
+            # Limit to 32 frames maximum
+            if len(frame_indices) > 32:
                 gap = len(frame_indices) / 32
                 frame_indices = [frame_indices[int(i * gap + gap / 2)] for i in range(32)]
             
-            total_frames_to_process = len(frame_indices)
             processed_frames = []
+            processed_captions = []
             
-            # Extract frames
+            # Process frames one at a time
             for frame_idx in frame_indices:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
                 ret, frame = cap.read()
@@ -637,67 +535,53 @@ class VideoProcessor:
                 # Convert BGR to RGB and resize
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 frame_resized = cv2.resize(frame_rgb, (448, 448))
-                processed_frames.append(frame_resized)
-            
-            # Save all frames as temporary images
-            temp_paths = []
-            for i, frame in enumerate(processed_frames):
-                temp_path = os.path.join(self.temp_dir, f"frame_{int(time.time())}_{i}.jpg")
-                success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-                if success:
-                    temp_paths.append(temp_path)
-            
-            try:
-                # Process all frames at once
-                cmd = [
-                    self.minicpmv_processor.cli_path,
-                    "-m", self.minicpmv_processor.model_path,
-                    "--mmproj", self.minicpmv_processor.mmproj_path,
-                    "-t", "4",
-                    "-n", "256",
-                    "--temp", "0.1",
-                    "--ctx-size", "8192",
-                    "--top-p", "0.7",
-                    "--top-k", "40"
-                ]
                 
-                # Add all images
-                for temp_path in temp_paths:
-                    cmd.extend(["--image", temp_path])
+                # Save frame as temporary image
+                temp_path = os.path.join(self.temp_dir, f"frame_{int(time.time() * 1000)}.jpg")
+                success = cv2.imwrite(temp_path, cv2.cvtColor(frame_resized, cv2.COLOR_RGB2BGR))
                 
-                # Add query
-                cmd.extend(["-p", "Describe what is happening in these frames."])
+                if not success:
+                    continue
                 
-                # Run command
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=180,  # Increased timeout for multiple frames
-                    cwd='/home/ubuntu/GSX-a1'
-                )
-                
-                if result.returncode == 0 and result.stdout:
-                    # Clean up the response
-                    response = ' '.join(
-                        line.strip() for line in result.stdout.split('\n')
-                        if line.strip()
-                        and not any(x in line.lower() for x in
-                                  ['loading', 'llama_print', 'log start', 'clip_model',
-                                   'user:', 'assistant:', '<user>', '<assistant>'])
+                try:
+                    # Use exact working command format
+                    cmd = [
+                        self.cli_path,
+                        "-m", self.model_path,
+                        "--mmproj", self.mmproj_path,
+                        "-t", "4",
+                        "-n", "256",
+                        "--temp", "0.1",
+                        "--ctx-size", "8192",
+                        "--top-p", "0.7",
+                        "--top-k", "40",
+                        "--image", temp_path,
+                        "-p", "What's happening in this frame?"
+                    ]
+                    
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=60
                     )
                     
-                    # Store processed frames and caption
-                    self.frames = processed_frames
-                    self.frame_captions = [response] * len(processed_frames)
-                    print(f"\rProcessed {len(processed_frames)}/{total_frames_to_process} frames ✓")
-                    
-                else:
-                    raise ValueError(f"Command failed with code {result.returncode}: {result.stderr}")
-                
-            finally:
-                # Clean up temp files
-                for temp_path in temp_paths:
+                    if result.returncode == 0 and result.stdout:
+                        # Clean up the response
+                        response = ' '.join(
+                            line.strip() for line in result.stdout.split('\n')
+                            if line.strip()
+                            and not any(x in line.lower() for x in
+                                      ['loading', 'llama_print', 'log start', 'clip_model',
+                                       'user:', 'assistant:', '<user>', '<assistant>'])
+                        )
+                        
+                        processed_frames.append(frame_resized)
+                        processed_captions.append(response)
+                        print(f"\rProcessed {len(processed_frames)}/{len(frame_indices)} frames ✓", end='', flush=True)
+                        
+                finally:
+                    # Clean up temp file
                     try:
                         if os.path.exists(temp_path):
                             os.remove(temp_path)
@@ -705,10 +589,15 @@ class VideoProcessor:
                         pass
             
             cap.release()
-            print("\nVideo processing completed!")
+            
+            # Store results
+            self.frames = processed_frames
+            self.frame_captions = processed_captions
+            
+            print(f"\nVideo processing completed!")
             print(f"Total frames processed: {len(self.frames)}")
             print(f"Total captions generated: {len(self.frame_captions)}")
-            print(f"Success rate: {(len(self.frame_captions) / total_frames_to_process) * 100:.1f}%")
+            print(f"Success rate: {(len(self.frame_captions) / len(frame_indices)) * 100:.1f}%")
             
             self.processing_complete = True
             
@@ -716,7 +605,12 @@ class VideoProcessor:
             print(f"\nError processing video: {str(e)}")
             raise
         finally:
-            self._cleanup_temp_files()
+            try:
+                for file in os.listdir(self.temp_dir):
+                    if file.endswith('.jpg'):
+                        os.remove(os.path.join(self.temp_dir, file))
+            except:
+                pass
 
 # ------------------------------------------------------------------------------
 # ROUTES
@@ -797,17 +691,16 @@ def chat():
         # Save frame as temporary image
         temp_path = os.path.join(video_processor.temp_dir, f"chat_frame_{int(time.time() * 1000)}.jpg")
         try:
-            success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
-                                [cv2.IMWRITE_JPEG_QUALITY, 95])
+            success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
             
             if not success:
                 return jsonify({'error': 'Failed to save frame'}), 500
             
             # Use exact working command format
             cmd = [
-                video_processor.minicpmv_processor.cli_path,
-                "-m", video_processor.minicpmv_processor.model_path,
-                "--mmproj", video_processor.minicpmv_processor.mmproj_path,
+                video_processor.cli_path,
+                "-m", video_processor.model_path,
+                "--mmproj", video_processor.mmproj_path,
                 "-t", "4",
                 "-n", "256",
                 "--temp", "0.1",
@@ -822,8 +715,7 @@ def chat():
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=60,
-                cwd='/home/ubuntu/GSX-a1'
+                timeout=60
             )
             
             if result.returncode == 0 and result.stdout:
