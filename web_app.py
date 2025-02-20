@@ -496,6 +496,7 @@ class VideoProcessor:
     
     def process_video(self, video_path: str, target_fps: int = 1) -> None:
         """Process video file and extract frames"""
+        temp_paths = []
         try:
             print("\nProcessing video frames...")
             
@@ -518,21 +519,23 @@ class VideoProcessor:
             sample_interval = max(1, int(fps))
             frame_indices = list(range(0, total_frames, sample_interval))
             
-            # Limit to 15 frames maximum (based on VidiQA)
-            if len(frame_indices) > 15:
-                gap = len(frame_indices) / 15
-                frame_indices = [frame_indices[int(i * gap + gap / 2)] for i in range(15)]
+            # Uniformly sample frames if too many
+            if len(frame_indices) > 6:
+                gap = len(frame_indices) / 6
+                frame_indices = [frame_indices[int(i * gap + gap / 2)] for i in range(6)]
             
             print(f"Will process {len(frame_indices)} frames")
             processed_frames = []
             processed_captions = []
-            temp_paths = []
             
-            # First pass: extract and save all frames
+            # First pass: extract all frames
             for i, frame_idx in enumerate(frame_indices):
                 print(f"\nExtracting frame {i+1}/{len(frame_indices)} (frame index: {frame_idx})")
+                
+                # Set frame position and read frame
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
                 ret, frame = cap.read()
+                
                 if not ret:
                     print(f"Failed to read frame {frame_idx}")
                     continue
@@ -540,46 +543,68 @@ class VideoProcessor:
                 # Convert BGR to RGB and resize
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 frame_resized = cv2.resize(frame_rgb, (448, 448))
-                
-                # Save frame as temporary image with unique name
-                temp_path = os.path.join(self.temp_dir, f"frame_{frame_idx}_{int(time.time())}.jpg")
-                print(f"Saving frame to {temp_path}")
-                cv2.imwrite(temp_path, cv2.cvtColor(frame_resized, cv2.COLOR_RGB2BGR))
-                temp_paths.append(temp_path)
                 processed_frames.append(frame_resized)
             
-            # Second pass: process all frames together
+            # Release video capture
+            cap.release()
+            
+            if not processed_frames:
+                raise ValueError("No frames were successfully processed")
+            
+            print(f"\nExtracted {len(processed_frames)} frames")
+            
+            # Second pass: process frames in small batches
             try:
-                # Construct command for multi-image processing
-                cmd = [
-                    self.cli_path,
-                    "-m", self.model_path,
-                    "--mmproj", self.mmproj_path,
-                    "-t", "4",
-                    "-n", "512",  # Increased for multi-image
-                    "--temp", "0.1",
-                    "--ctx-size", "8192",  # Increased for multi-image
-                    "--top-p", "0.7",
-                    "--top-k", "40"
-                ]
-                
-                # Add all images to command
-                for temp_path in temp_paths:
-                    cmd.extend(["--image", temp_path])
-                
-                # Add prompt
-                cmd.extend(["-p", "Describe what is happening in these frames."])
-                
-                print(f"Running command: {' '.join(cmd)}")
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=180  # Increased timeout for multi-image
-                )
-                
-                if result.returncode == 0 and result.stdout:
-                    # Clean up the response
+                for i in range(0, len(processed_frames), 2):  # Process 2 frames at a time
+                    batch_frames = processed_frames[i:i+2]
+                    batch_paths = []
+                    
+                    # Save frames as temporary images
+                    for j, frame in enumerate(batch_frames):
+                        temp_path = os.path.join(self.temp_dir, f"frame_{i+j}_{int(time.time())}.jpg")
+                        print(f"Saving frame to {temp_path}")
+                        
+                        success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+                        if not success:
+                            print(f"Failed to save frame {i+j}")
+                            continue
+                            
+                        batch_paths.append(temp_path)
+                        temp_paths.append(temp_path)
+                    
+                    if not batch_paths:
+                        continue
+                    
+                    # Process batch
+                    cmd = [
+                        self.cli_path,
+                        "-m", self.model_path,
+                        "--mmproj", self.mmproj_path,
+                        "-t", "4",
+                        "-n", "256",
+                        "--temp", "0.1",
+                        "--ctx-size", "8192",
+                        "--top-p", "0.7",
+                        "--top-k", "40"
+                    ]
+                    
+                    # Add images from batch
+                    for path in batch_paths:
+                        cmd.extend(["--image", path])
+                    
+                    # Add prompt
+                    cmd.extend(["-p", "Describe what is happening in these frames."])
+                    
+                    print(f"Processing frames {i+1}-{i+len(batch_frames)}")
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=90,  # 90 seconds for batch
+                        check=True
+                    )
+                    
+                    # Process output
                     response = ' '.join(
                         line.strip() for line in result.stdout.split('\n')
                         if line.strip()
@@ -588,50 +613,54 @@ class VideoProcessor:
                                    'user:', 'assistant:', '<user>', '<assistant>'])
                     )
                     
-                    # Split response into captions (one per frame)
-                    captions = [response] * len(processed_frames)  # For now, use same caption for all frames
-                    processed_captions.extend(captions)
-                    print(f"Successfully processed all frames")
-                else:
-                    print(f"Command failed with code {result.returncode}: {result.stderr}")
+                    # Add same caption for all frames in batch
+                    processed_captions.extend([response] * len(batch_frames))
+                    print(f"Successfully processed batch")
                     
-            except subprocess.TimeoutExpired:
-                print(f"Timeout processing frames")
+                    # Clean up batch files
+                    for path in batch_paths:
+                        try:
+                            if os.path.exists(path):
+                                os.remove(path)
+                                temp_paths.remove(path)
+                                print(f"Cleaned up {path}")
+                        except Exception as e:
+                            print(f"Failed to clean up {path}: {str(e)}")
+                
+                # Store results
+                self.frames = processed_frames
+                self.frame_captions = processed_captions
+                self.processing_complete = True
+                
+                print(f"\nVideo processing completed successfully!")
+                print(f"Total frames processed: {len(self.frames)}")
+                print(f"Total captions generated: {len(self.frame_captions)}")
+                
+            except subprocess.TimeoutExpired as e:
+                print(f"Command timed out after {e.timeout} seconds")
+                raise
+            except subprocess.CalledProcessError as e:
+                print(f"Command failed with return code {e.returncode}")
+                print(f"Error output: {e.stderr}")
+                raise
             except Exception as e:
                 print(f"Error processing frames: {str(e)}")
-            finally:
-                # Clean up temp files
-                for temp_path in temp_paths:
-                    try:
-                        if os.path.exists(temp_path):
-                            os.remove(temp_path)
-                            print(f"Cleaned up {temp_path}")
-                    except Exception as e:
-                        print(f"Failed to clean up {temp_path}: {str(e)}")
-            
-            cap.release()
-            
-            # Store results
-            self.frames = processed_frames
-            self.frame_captions = processed_captions
-            
-            print(f"\nVideo processing completed!")
-            print(f"Total frames processed: {len(self.frames)}")
-            print(f"Total captions generated: {len(self.frame_captions)}")
-            print(f"Success rate: {(len(self.frame_captions) / len(frame_indices)) * 100:.1f}%")
-            
-            self.processing_complete = True
-            
+                raise
+                
         except Exception as e:
-            print(f"\nError processing video: {str(e)}")
+            print(f"\nError in process_video: {str(e)}")
+            self.processing_complete = False
             raise
+            
         finally:
-            try:
-                for file in os.listdir(self.temp_dir):
-                    if file.endswith('.jpg'):
-                        os.remove(os.path.join(self.temp_dir, file))
-            except Exception as e:
-                print(f"Error cleaning up temp files: {str(e)}")
+            # Clean up any remaining temp files
+            for temp_path in temp_paths:
+                try:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                        print(f"Cleaned up {temp_path}")
+                except Exception as e:
+                    print(f"Failed to clean up {temp_path}: {str(e)}")
 
 # ------------------------------------------------------------------------------
 # ROUTES
