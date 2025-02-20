@@ -30,26 +30,25 @@ video_processor = None  # Global VideoProcessor instance
 
 # Configure logging
 logging.basicConfig(
-    level=logging.WARNING,  # Change to WARNING to suppress most logs
-    format='%(message)s',  # Simplified format
+    level=logging.DEBUG,  # Change to DEBUG for maximum verbosity
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler()
+        logging.StreamHandler(),
+        logging.FileHandler('app.log')
     ]
 )
 logger = logging.getLogger(__name__)
 
-# Suppress verbose logs from other modules
-logging.getLogger("transformers").setLevel(logging.ERROR)
-logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
-logging.getLogger("clip_model").setLevel(logging.ERROR)
-logging.getLogger("llama_model").setLevel(logging.ERROR)
-logging.getLogger("werkzeug").setLevel(logging.ERROR)  # Suppress Flask logs
-logging.getLogger("PIL").setLevel(logging.ERROR)  # Suppress PIL logs
-logging.getLogger("tqdm").setLevel(logging.ERROR)  # Suppress tqdm logs
-logging.getLogger("absl").setLevel(logging.ERROR)  # Suppress TensorFlow logs
+# Keep Flask and werkzeug logs for debugging
+logging.getLogger("werkzeug").setLevel(logging.DEBUG)
+logging.getLogger("flask").setLevel(logging.DEBUG)
+
+# Only suppress specific noisy modules
+logging.getLogger("PIL").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 # Disable TensorFlow logging
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logging
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Less verbose TF logging
 
 # Ensure upload folder exists
 if not os.path.exists(app.config['UPLOAD_FOLDER']):
@@ -602,11 +601,21 @@ class VideoProcessor:
                         capture_output=True,
                         text=True,
                         timeout=120,  # 2 minutes timeout
-                        check=True,
+                        check=False,  # Don't raise exception on non-zero exit
                         cwd=self.base_dir  # Run from base directory
                     )
                     
-                    # Process output
+                    # Log command output regardless of success
+                    logger.debug(f"Command stdout: {result.stdout}")
+                    logger.debug(f"Command stderr: {result.stderr}")
+                    
+                    if result.returncode != 0:
+                        error_msg = f"Command failed with code {result.returncode}: {result.stderr}"
+                        logger.error(error_msg)
+                        self.frame_captions.append(f"Error: {error_msg}")
+                        continue
+                    
+                    # Process output only if command succeeded
                     response = ' '.join(
                         line.strip() for line in result.stdout.split('\n')
                         if line.strip()
@@ -617,11 +626,12 @@ class VideoProcessor:
                     )
                     
                     if response:
-                        print(f"Generated caption for frame {i+1}: {response}")
+                        logger.info(f"Generated caption for frame {i+1}: {response}")
                         self.frame_captions.append(response)
                     else:
-                        print(f"Warning: No caption generated for frame {i+1}")
-                        self.frame_captions.append("No caption generated")
+                        error_msg = "No caption generated from command output"
+                        logger.warning(error_msg)
+                        self.frame_captions.append(error_msg)
                     
                 except subprocess.TimeoutExpired:
                     print(f"Error: Command timed out for frame {i+1}")
@@ -666,40 +676,48 @@ def index():
 def upload_video():
     global video_processor
     try:
+        logger.info("Upload request received")
         if 'video' not in request.files:
+            logger.error("No video file in request")
             return jsonify({'error': 'No video file uploaded'}), 400
             
         video_file = request.files['video']
         if video_file.filename == '':
+            logger.error("Empty filename")
             return jsonify({'error': 'No selected file'}), 400
             
         # Save the uploaded file
         video_path = os.path.join(app.config['UPLOAD_FOLDER'], video_file.filename)
+        logger.info(f"Saving video to {video_path}")
         video_file.save(video_path)
         
         try:
             # Initialize video processing if not already initialized
             if video_processor is None:
+                logger.info("Initializing video processor")
                 video_processor = VideoProcessor()
             
             # Process video and wait for completion
+            logger.info("Starting video processing")
             video_processor.process_video(video_path)
             
             # Only return success if processing is complete
             if video_processor.processing_complete:
+                logger.info(f"Video processing complete. Total frames: {len(video_processor.frames)}")
                 return jsonify({
                     'message': 'Video processed successfully',
                     'total_frames': len(video_processor.frames)
                 })
             else:
+                logger.error("Video processing incomplete")
                 return jsonify({'error': 'Video processing incomplete'}), 500
             
         except Exception as e:
-            logger.error(f"Error processing video: {str(e)}")
+            logger.error(f"Error processing video: {str(e)}", exc_info=True)
             return jsonify({'error': str(e)}), 500
             
     except Exception as e:
-        logger.error(f"Error in upload: {str(e)}")
+        logger.error(f"Error in upload: {str(e)}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/chat', methods=['POST'])
