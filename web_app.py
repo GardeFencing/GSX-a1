@@ -477,9 +477,9 @@ class VideoProcessor:
         self.frame_captions = []
         self.processing_complete = False
         
-        # Enhanced batch processing settings
-        self.batch_size = 16  # Increased batch size
-        self.max_workers = min(32, (os.cpu_count() or 1) * 2)  # More workers
+        # Reduced batch size and workers for better stability
+        self.batch_size = 4  # Reduced from 16
+        self.max_workers = min(4, (os.cpu_count() or 1))  # Reduced from 32
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
         
         # Create temp directory
@@ -556,56 +556,80 @@ class VideoProcessor:
                 return []
             
             try:
-                # Construct command without system prompt
-                cmd = [
-                    self.minicpmv_processor.cli_path,
-                    "-m", self.minicpmv_processor.model_path,
-                    "--mmproj", self.minicpmv_processor.mmproj_path,
-                    "-t", str(self.minicpmv_processor.n_threads),
-                    "-n", "256",
-                    "--temp", str(self.minicpmv_processor.temp),
-                    "--ctx-size", "8192",
-                    "--top-p", str(self.minicpmv_processor.top_p),
-                    "--top-k", str(self.minicpmv_processor.top_k)
-                ]
+                # Process frames with retries
+                max_retries = 3
+                retry_count = 0
+                timeout = 120  # Increased timeout
                 
-                # Add images
-                for temp_path in temp_paths:
-                    cmd.extend(["--image", temp_path])
-                
-                # Add query
-                cmd.extend(["-p", "Describe these frames in sequence, noting any changes or movements between them."])
-                
-                # Run command
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                    cwd='/home/ubuntu/GSX-a1'
-                )
-                
-                if result.returncode == 0 and result.stdout:
-                    # Clean up the response
-                    response = ' '.join(
-                        line.strip() for line in result.stdout.split('\n')
-                        if line.strip()
-                        and not any(x in line.lower() for x in
-                                  ['loading', 'llama_print', 'log start', 'clip_model',
-                                   'user:', 'assistant:', '<user>', '<assistant>'])
-                    )
-                    
-                    # Split into individual frame descriptions
-                    frame_captions = response.split('\n')
-                    while len(frame_captions) < len(processed_frames):
-                        frame_captions.append("No specific description available")
-                    frame_captions = frame_captions[:len(processed_frames)]
-                    
-                    return list(zip(processed_frames, frame_captions))
-                else:
-                    print(f"Command failed with code {result.returncode}: {result.stderr}")
-                    return []
-                    
+                while retry_count < max_retries:
+                    try:
+                        # Construct command
+                        cmd = [
+                            self.minicpmv_processor.cli_path,
+                            "-m", self.minicpmv_processor.model_path,
+                            "--mmproj", self.minicpmv_processor.mmproj_path,
+                            "-t", str(self.minicpmv_processor.n_threads),
+                            "-n", "256",
+                            "--temp", str(self.minicpmv_processor.temp),
+                            "--ctx-size", "8192",
+                            "--top-p", str(self.minicpmv_processor.top_p),
+                            "--top-k", str(self.minicpmv_processor.top_k)
+                        ]
+                        
+                        # Add images
+                        for temp_path in temp_paths:
+                            cmd.extend(["--image", temp_path])
+                        
+                        # Add query
+                        cmd.extend(["-p", "Describe these frames in sequence, noting any changes or movements between them."])
+                        
+                        # Run command with increased timeout
+                        result = subprocess.run(
+                            cmd,
+                            capture_output=True,
+                            text=True,
+                            timeout=timeout,
+                            cwd='/home/ubuntu/GSX-a1'
+                        )
+                        
+                        if result.returncode == 0 and result.stdout:
+                            # Clean up the response
+                            response = ' '.join(
+                                line.strip() for line in result.stdout.split('\n')
+                                if line.strip()
+                                and not any(x in line.lower() for x in
+                                          ['loading', 'llama_print', 'log start', 'clip_model',
+                                           'user:', 'assistant:', '<user>', '<assistant>'])
+                            )
+                            
+                            # Split into individual frame descriptions
+                            frame_captions = response.split('\n')
+                            while len(frame_captions) < len(processed_frames):
+                                frame_captions.append("No specific description available")
+                            frame_captions = frame_captions[:len(processed_frames)]
+                            
+                            return list(zip(processed_frames, frame_captions))
+                            
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            print(f"\nRetrying batch (attempt {retry_count + 1}/{max_retries})...")
+                            time.sleep(2)  # Wait before retrying
+                            continue
+                        else:
+                            print(f"\nFailed to process batch after {max_retries} attempts")
+                            return []
+                            
+                    except subprocess.TimeoutExpired:
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            print(f"\nTimeout - Retrying batch (attempt {retry_count + 1}/{max_retries})...")
+                            timeout += 30  # Increase timeout for next attempt
+                            time.sleep(2)  # Wait before retrying
+                            continue
+                        else:
+                            print(f"\nBatch processing timed out after {max_retries} attempts")
+                            return []
+                            
             finally:
                 # Clean up temp files
                 for temp_path in temp_paths:
