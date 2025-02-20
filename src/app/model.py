@@ -1,10 +1,11 @@
 import os
 import logging
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModel, AutoTokenizer
 from typing import Tuple, Optional, List
 from PIL import Image
 from dotenv import load_dotenv
+from decord import VideoReader, cpu
 
 # Load environment variables
 load_dotenv()
@@ -16,34 +17,31 @@ logger = logging.getLogger(__name__)
 # Constants
 MODEL_NAME = "openbmb/MiniCPM-V-2_6"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+MAX_NUM_FRAMES = 64  # Reduce if CUDA OOM
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 
-def load_model_and_tokenizer() -> Tuple[AutoModelForCausalLM, AutoTokenizer]:
+def load_model_and_tokenizer() -> Tuple[AutoModel, AutoTokenizer]:
     """
     Load MiniCPM-V model and tokenizer with multi-image support.
     
     Returns:
-        Tuple[AutoModelForCausalLM, AutoTokenizer]: Loaded model and tokenizer
+        Tuple[AutoModel, AutoTokenizer]: Loaded model and tokenizer
     """
     try:
         logger.info(f"Loading model {MODEL_NAME} on {DEVICE}...")
         
-        if not ACCESS_TOKEN:
-            raise ValueError("ACCESS_TOKEN not found in environment variables")
-        
-        # Load model with optimizations
-        model = AutoModelForCausalLM.from_pretrained(
+        # Load model with correct settings
+        model = AutoModel.from_pretrained(
             MODEL_NAME,
-            torch_dtype=torch.float16 if DEVICE == "cuda" else torch.float32,
-            device_map="auto" if DEVICE == "cuda" else None,
-            token=ACCESS_TOKEN,
-            trust_remote_code=True
+            trust_remote_code=True,
+            attn_implementation='sdpa',
+            torch_dtype=torch.bfloat16
         )
+        model = model.eval().to(DEVICE)
         
-        # Load tokenizer with trust_remote_code for multi-image support
+        # Load tokenizer
         tokenizer = AutoTokenizer.from_pretrained(
-            MODEL_NAME, 
-            token=ACCESS_TOKEN,
+            MODEL_NAME,
             trust_remote_code=True
         )
         
@@ -54,76 +52,60 @@ def load_model_and_tokenizer() -> Tuple[AutoModelForCausalLM, AutoTokenizer]:
         logger.error(f"Error loading model: {str(e)}")
         raise
 
-def generate_response(model: AutoModelForCausalLM, 
+def encode_video(video_path: str) -> List[Image.Image]:
+    """
+    Extract frames from video file.
+    """
+    def uniform_sample(l, n):
+        gap = len(l) / n
+        idxs = [int(i * gap + gap / 2) for i in range(n)]
+        return [l[i] for i in idxs]
+
+    try:
+        vr = VideoReader(video_path, ctx=cpu(0))
+        sample_fps = round(vr.get_avg_fps() / 1)  # 1 FPS
+        frame_idx = [i for i in range(0, len(vr), sample_fps)]
+        
+        if len(frame_idx) > MAX_NUM_FRAMES:
+            frame_idx = uniform_sample(frame_idx, MAX_NUM_FRAMES)
+            
+        frames = vr.get_batch(frame_idx).asnumpy()
+        frames = [Image.fromarray(v.astype('uint8')) for v in frames]
+        logger.info(f'Extracted {len(frames)} frames from video')
+        return frames
+        
+    except Exception as e:
+        logger.error(f"Error encoding video: {str(e)}")
+        raise
+
+def generate_response(model: AutoModel, 
                      tokenizer: AutoTokenizer,
                      frames: List[Image.Image],
                      question: str,
-                     few_shot_examples: Optional[List[dict]] = None) -> Optional[str]:
+                     is_video: bool = False) -> Optional[str]:
     """
-    Generate response for a video question using MiniCPM-V with multi-image and few-shot support.
-    
-    Args:
-        model (AutoModelForCausalLM): The loaded model
-        tokenizer (AutoTokenizer): The loaded tokenizer
-        frames (List[Image.Image]): List of video frames
-        question (str): Question about the video
-        few_shot_examples (Optional[List[dict]]): List of few-shot examples
-        
-    Returns:
-        Optional[str]: Generated response or None if error occurs
+    Generate response for video/image questions using MiniCPM-V.
     """
     try:
-        # Prepare image tags for multi-image input
-        image_tags = "".join(["(<image>./</image>)" for _ in frames])
+        # For video, we need special parameters
+        params = {}
+        if is_video:
+            params["use_image_id"] = False
+            params["max_slice_nums"] = 2  # use 1 if CUDA OOM and video resolution > 448*448
+            
+            # For video, append question after frames
+            msgs = [{'role': 'user', 'content': frames + [question]}]
+        else:
+            # For single/multi image, include images and question in content
+            msgs = [{'role': 'user', 'content': [*frames, question]}]
         
-        # Prepare few-shot examples if provided
-        few_shot_prompt = ""
-        if few_shot_examples:
-            for example in few_shot_examples:
-                few_shot_prompt += f"User: {example['question']}\nAssistant: {example['answer']}\n\n"
-        
-        # Construct messages with multi-image support
-        messages = [{
-            "role": "user",
-            "content": f"{image_tags}\n{few_shot_prompt}Question: {question}"
-        }]
-        
-        # Apply chat template
-        prompt = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
+        # Generate response
+        response = model.chat(
+            image=None,
+            msgs=msgs,
+            tokenizer=tokenizer,
+            **params
         )
-        
-        # Prepare inputs with multi-modal data
-        inputs = {
-            "prompt": prompt,
-            "multi_modal_data": {
-                "image": frames if len(frames) > 1 else frames[0]
-            }
-        }
-        
-        # Define stop tokens
-        stop_tokens = ['<|im_end|>', '<|endoftext|>']
-        stop_token_ids = [tokenizer.convert_tokens_to_ids(i) for i in stop_tokens]
-        
-        # Generate response with optimized parameters
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=256,
-            do_sample=True,
-            temperature=0.7,
-            top_p=0.9,
-            top_k=50,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=stop_token_ids,
-            use_cache=True,
-            num_beams=3 if DEVICE == "cuda" else 1
-        )
-        
-        # Decode and clean response
-        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        response = response.replace(prompt, "").strip()
         
         return response if response else None
         
