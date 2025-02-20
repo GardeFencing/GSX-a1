@@ -30,6 +30,13 @@
             max-height: 400px;
             margin: 20px auto;
         }
+        .caption-container {
+            margin: 15px 0;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            text-align: left;
+        }
         .chat-container {
             height: 300px;
             overflow-y: auto;
@@ -45,6 +52,11 @@
         .parameter-slider {
             margin: 15px 0;
         }
+        #currentCaption {
+            font-size: 1.1em;
+            color: #495057;
+            margin: 10px 0;
+        }
     </style>
 </head>
 <body>
@@ -54,7 +66,11 @@
 
         <div class="video-container">
             <input type="file" id="videoUpload" accept="video/*" class="form-control mb-3">
-            <video id="videoPreview" controls style="display: none;"></video>
+            <video id="videoPreview" controls style="display: none;" ontimeupdate="updateCaption()"></video>
+            <div class="caption-container">
+                <strong>Current Frame Caption:</strong>
+                <div id="currentCaption">No caption available</div>
+            </div>
             <div class="progress">
                 <div class="progress-bar" role="progressbar" style="width: 0%"></div>
             </div>
@@ -92,12 +108,35 @@
     </div>
 
     <script>
+        let videoProcessed = false;
+        let currentFrameIndex = 0;
+        let frameCaptions = [];
+
         // Update parameter values
         document.querySelectorAll('.form-range').forEach(range => {
             range.addEventListener('input', function() {
                 document.getElementById(this.id + 'Value').textContent = this.value;
             });
         });
+
+        function updateCaption() {
+            const video = document.getElementById('videoPreview');
+            if (!video || !videoProcessed) return;
+
+            // Calculate current frame index based on video time
+            const fps = 5; // Assuming 5 fps processing rate
+            currentFrameIndex = Math.floor(video.currentTime * fps);
+            
+            // Get frame data
+            fetch(`/get_frame/${currentFrameIndex}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.caption) {
+                        document.getElementById('currentCaption').textContent = data.caption;
+                    }
+                })
+                .catch(error => console.error('Error fetching caption:', error));
+        }
 
         // Video upload and preview
         document.getElementById('videoUpload').addEventListener('change', function(e) {
@@ -106,8 +145,8 @@
                 const video = document.getElementById('videoPreview');
                 video.style.display = 'block';
                 video.src = URL.createObjectURL(file);
-
-                // Upload the video
+                videoProcessed = false;
+                document.getElementById('currentCaption').textContent = 'Processing video...';
                 uploadVideo(file);
             }
         });
@@ -129,7 +168,10 @@
                 if (data.error) {
                     addMessage('error', `Error: ${data.error}`);
                 } else {
+                    videoProcessed = true;
                     addMessage('system', 'Video uploaded and processed successfully!');
+                    // Get first frame caption
+                    updateCaption();
                 }
             })
             .catch(error => {
@@ -150,6 +192,11 @@
         }
 
         function askQuestion() {
+            if (!videoProcessed) {
+                addMessage('error', 'Please wait for video processing to complete');
+                return;
+            }
+
             const question = document.getElementById('questionInput').value.trim();
             if (!question) return;
 
@@ -158,6 +205,7 @@
 
             const params = {
                 query: question,
+                current_frame: currentFrameIndex,
                 temperature: parseFloat(document.getElementById('temperature').value),
                 top_p: parseFloat(document.getElementById('topP').value),
                 top_k: parseInt(document.getElementById('topK').value),

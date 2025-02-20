@@ -679,21 +679,44 @@ def upload_video():
 def chat():
     global video_processor
     try:
-        if not video_processor:
+        if not video_processor or not video_processor.processing_complete:
             return jsonify({'error': 'Please upload a video first'}), 400
             
         data = request.get_json()
         if not data or 'query' not in data:
             return jsonify({'error': 'No query provided'}), 400
             
-        query = data['query'].lower()
+        query = data['query']
         current_frame = data.get('current_frame', 0)
         
-        # Get current frame and process with MiniCPM-V
-        current_frame_img = video_processor.frames[current_frame]
-        response = video_processor.minicpmv_processor.process_frame(
-            current_frame_img,
-            f"Question about the video frame: {query}"
+        # Ensure current_frame is within bounds
+        if current_frame >= len(video_processor.frames):
+            current_frame = len(video_processor.frames) - 1
+            
+        # Get current frame and its context
+        frame_context = []
+        start_idx = max(0, current_frame - 2)
+        end_idx = min(len(video_processor.frames), current_frame + 3)
+        
+        # Get 5 frames around the current frame for context
+        for i in range(start_idx, end_idx):
+            frame_context.append(video_processor.frames[i])
+        
+        # Create a context-aware prompt
+        system_prompt = f"""You are analyzing a video sequence. The user is currently viewing frame {current_frame + 1} of {len(video_processor.frames)}.
+        The frame shows: {video_processor.frame_captions[current_frame]}
+        
+        Previous context: {' '.join(video_processor.frame_captions[start_idx:current_frame])}
+        Next context: {' '.join(video_processor.frame_captions[current_frame + 1:end_idx])}
+        
+        Please answer the following question about the video: {query}
+        """
+        
+        # Process the query with context
+        response = video_processor.minicpmv_processor.process_frames(
+            frame_context,
+            system_prompt=system_prompt,
+            query=query
         )
         
         return jsonify({'response': response})
