@@ -3,227 +3,191 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fencing Coach AI</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <title>Video Question Answering</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body {
             padding: 20px;
             background-color: #f8f9fa;
         }
-        .frame-container {
-            position: relative;
+        .main-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        .video-container {
             margin: 20px 0;
-            background-color: white;
-            padding: 10px;
-            border-radius: 5px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .frame-controls {
-            margin: 10px 0;
-        }
-        .chat-container {
-            margin-top: 20px;
-            background-color: white;
+            border: 2px dashed #dee2e6;
             padding: 20px;
             border-radius: 5px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-align: center;
         }
-        .chat-messages {
+        #videoPreview {
+            max-width: 100%;
+            max-height: 400px;
+            margin: 20px auto;
+        }
+        .chat-container {
             height: 300px;
             overflow-y: auto;
-            margin-bottom: 10px;
-            padding: 10px;
             border: 1px solid #dee2e6;
+            padding: 15px;
             border-radius: 5px;
+            margin-bottom: 15px;
         }
-        .progress-container {
-            margin: 10px 0;
+        .progress {
             display: none;
+            margin: 20px 0;
         }
-        .btn-primary {
-            background-color: #0056b3;
-            border-color: #0056b3;
-        }
-        .btn-primary:hover {
-            background-color: #004494;
-            border-color: #004494;
+        .parameter-slider {
+            margin: 15px 0;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1 class="text-center mb-4">Fencing Coach AI</h1>
-        
-        <!-- Video Upload -->
-        <div class="card mb-4">
-            <div class="card-body">
-                <h5 class="card-title">Upload Video</h5>
-                <form id="uploadForm">
-                    <div class="mb-3">
-                        <input type="file" class="form-control" id="videoFile" accept="video/*" required>
-                    </div>
-                    <button type="submit" class="btn btn-primary">Upload & Analyze</button>
-                </form>
-                <div class="progress-container">
-                    <div class="progress">
-                        <div class="progress-bar" role="progressbar" style="width: 0%"></div>
-                    </div>
-                    <small class="text-muted">Processing video...</small>
+    <div class="main-container">
+        <h1 class="mb-4">Video Question Answering</h1>
+        <p class="lead">Upload a video and ask questions about it. The AI will analyze the video and provide answers.</p>
+
+        <div class="video-container">
+            <input type="file" id="videoUpload" accept="video/*" class="form-control mb-3">
+            <video id="videoPreview" controls style="display: none;"></video>
+            <div class="progress">
+                <div class="progress-bar" role="progressbar" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <div class="row mt-4">
+            <div class="col-md-6">
+                <h3>Parameters</h3>
+                <div class="parameter-slider">
+                    <label>Temperature: <span id="tempValue">0.7</span></label>
+                    <input type="range" class="form-range" min="0.01" max="1.99" step="0.01" value="0.7" id="temperature">
+                </div>
+                <div class="parameter-slider">
+                    <label>Top P: <span id="topPValue">0.8</span></label>
+                    <input type="range" class="form-range" min="0" max="1" step="0.1" value="0.8" id="topP">
+                </div>
+                <div class="parameter-slider">
+                    <label>Top K: <span id="topKValue">100</span></label>
+                    <input type="range" class="form-range" min="0" max="1000" step="10" value="100" id="topK">
+                </div>
+                <div class="parameter-slider">
+                    <label>Max Tokens: <span id="maxTokensValue">512</span></label>
+                    <input type="range" class="form-range" min="1" max="4096" step="1" value="512" id="maxTokens">
                 </div>
             </div>
-        </div>
-
-        <!-- Frame Analysis -->
-        <div class="frame-container" style="display: none;">
-            <h5>Frame Analysis</h5>
-            <img id="currentFrame" class="img-fluid mb-2" style="max-width: 100%;">
-            <div class="frame-controls">
-                <button class="btn btn-secondary" onclick="previousFrame()">Previous</button>
-                <button class="btn btn-secondary" onclick="nextFrame()">Next</button>
-                <button class="btn btn-secondary" id="playPauseBtn" onclick="togglePlayPause()">Play</button>
-            </div>
-            <div id="frameCaption" class="mt-2"></div>
-        </div>
-
-        <!-- Chat Interface -->
-        <div class="chat-container">
-            <h5>Chat with Coach</h5>
-            <div class="chat-messages" id="chatMessages"></div>
-            <div class="input-group">
-                <input type="text" class="form-control" id="chatInput" placeholder="Ask about the fencing technique...">
-                <button class="btn btn-primary" onclick="sendMessage()">Send</button>
+            <div class="col-md-6">
+                <h3>Chat</h3>
+                <div id="chatMessages" class="chat-container"></div>
+                <div class="input-group">
+                    <input type="text" id="questionInput" class="form-control" placeholder="Ask a question about the video...">
+                    <button class="btn btn-primary" onclick="askQuestion()">Ask</button>
+                </div>
             </div>
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        let currentFrameIndex = 0;
-        let totalFrames = 0;
-        let isPlaying = false;
-        let playInterval;
+        // Update parameter values
+        document.querySelectorAll('.form-range').forEach(range => {
+            range.addEventListener('input', function() {
+                document.getElementById(this.id + 'Value').textContent = this.value;
+            });
+        });
 
-        // Handle video upload
-        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const formData = new FormData();
-            const fileInput = document.getElementById('videoFile');
-            formData.append('video', fileInput.files[0]);
+        // Video upload and preview
+        document.getElementById('videoUpload').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const video = document.getElementById('videoPreview');
+                video.style.display = 'block';
+                video.src = URL.createObjectURL(file);
 
-            const progressContainer = document.querySelector('.progress-container');
-            progressContainer.style.display = 'block';
-
-            try {
-                const response = await fetch('/upload', {
-                    method: 'POST',
-                    body: formData
-                });
-                const data = await response.json();
-                
-                if (response.ok) {
-                    totalFrames = data.total_frames;
-                    // Redirect to the viewer page
-                    window.location.href = '/view_video';
-                } else {
-                    throw new Error(data.error || 'Error processing video');
-                }
-            } catch (error) {
-                addMessage('error', 'Error: ' + error.message);
-            } finally {
-                progressContainer.style.display = 'none';
+                // Upload the video
+                uploadVideo(file);
             }
         });
 
-        // Frame navigation
-        async function loadFrame(index) {
-            try {
-                const response = await fetch(`/get_frame/${index}`);
-                const data = await response.json();
-                
-                if (response.ok) {
-                    document.getElementById('currentFrame').src = 'data:image/jpeg;base64,' + data.frame;
-                    document.getElementById('frameCaption').textContent = data.caption;
-                    currentFrameIndex = index;
+        function uploadVideo(file) {
+            const formData = new FormData();
+            formData.append('video', file);
+
+            const progress = document.querySelector('.progress');
+            const progressBar = progress.querySelector('.progress-bar');
+            progress.style.display = 'flex';
+
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    addMessage('error', `Error: ${data.error}`);
+                } else {
+                    addMessage('system', 'Video uploaded and processed successfully!');
                 }
-            } catch (error) {
-                console.error('Error loading frame:', error);
-            }
+            })
+            .catch(error => {
+                addMessage('error', `Error: ${error.message}`);
+            })
+            .finally(() => {
+                progress.style.display = 'none';
+            });
         }
 
-        function previousFrame() {
-            if (currentFrameIndex > 0) {
-                loadFrame(currentFrameIndex - 1);
-            }
-        }
-
-        function nextFrame() {
-            if (currentFrameIndex < totalFrames - 1) {
-                loadFrame(currentFrameIndex + 1);
-            }
-        }
-
-        function togglePlayPause() {
-            isPlaying = !isPlaying;
-            const btn = document.getElementById('playPauseBtn');
-            btn.textContent = isPlaying ? 'Pause' : 'Play';
-            
-            if (isPlaying) {
-                playInterval = setInterval(() => {
-                    if (currentFrameIndex < totalFrames - 1) {
-                        loadFrame(currentFrameIndex + 1);
-                    } else {
-                        togglePlayPause();
-                    }
-                }, 100);
-            } else {
-                clearInterval(playInterval);
-            }
-        }
-
-        // Chat functionality
         function addMessage(type, text) {
             const messagesDiv = document.getElementById('chatMessages');
             const messageDiv = document.createElement('div');
-            messageDiv.className = 'alert ' + (type === 'user' ? 'alert-primary' : type === 'error' ? 'alert-danger' : 'alert-secondary');
+            messageDiv.className = `alert ${type === 'user' ? 'alert-primary' : type === 'error' ? 'alert-danger' : 'alert-success'} mb-2`;
             messageDiv.textContent = text;
             messagesDiv.appendChild(messageDiv);
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
 
-        async function sendMessage() {
-            const input = document.getElementById('chatInput');
-            const query = input.value.trim();
-            
-            if (!query) return;
-            
-            addMessage('user', query);
-            input.value = '';
-            
-            try {
-                const response = await fetch('/chat', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ query })
-                });
-                
-                const data = await response.json();
-                
-                if (response.ok) {
-                    addMessage('system', data.response);
+        function askQuestion() {
+            const question = document.getElementById('questionInput').value.trim();
+            if (!question) return;
+
+            addMessage('user', question);
+            document.getElementById('questionInput').value = '';
+
+            const params = {
+                query: question,
+                temperature: parseFloat(document.getElementById('temperature').value),
+                top_p: parseFloat(document.getElementById('topP').value),
+                top_k: parseInt(document.getElementById('topK').value),
+                max_tokens: parseInt(document.getElementById('maxTokens').value)
+            };
+
+            fetch('/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(params)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    addMessage('error', `Error: ${data.error}`);
                 } else {
-                    throw new Error(data.error || 'Error processing request');
+                    addMessage('system', data.response);
                 }
-            } catch (error) {
-                addMessage('error', 'Error: ' + error.message);
-            }
+            })
+            .catch(error => {
+                addMessage('error', `Error: ${error.message}`);
+            });
         }
 
-        // Handle Enter key in chat input
-        document.getElementById('chatInput').addEventListener('keypress', (e) => {
+        // Handle Enter key in question input
+        document.getElementById('questionInput').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
-                sendMessage();
+                askQuestion();
             }
         });
     </script>
