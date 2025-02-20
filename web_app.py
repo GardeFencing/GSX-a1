@@ -556,10 +556,7 @@ class VideoProcessor:
                 return []
             
             try:
-                # Process the batch together
-                system_prompt = "You are analyzing a sequence of video frames. Describe each frame briefly and note any changes or movements."
-                
-                # Construct command
+                # Construct command without system prompt
                 cmd = [
                     self.minicpmv_processor.cli_path,
                     "-m", self.minicpmv_processor.model_path,
@@ -569,8 +566,7 @@ class VideoProcessor:
                     "--temp", str(self.minicpmv_processor.temp),
                     "--ctx-size", "8192",
                     "--top-p", str(self.minicpmv_processor.top_p),
-                    "--top-k", str(self.minicpmv_processor.top_k),
-                    "--system", system_prompt
+                    "--top-k", str(self.minicpmv_processor.top_k)
                 ]
                 
                 # Add images
@@ -782,12 +778,14 @@ def chat():
             if not temp_paths:
                 return jsonify({'error': 'Failed to save frames'}), 500
             
-            # Create context-aware system prompt
-            system_prompt = f"""You are analyzing a video sequence. The user is currently viewing frame {current_frame + 1} of {len(video_processor.frames)}.
-            The frame shows: {video_processor.frame_captions[current_frame]}
+            # Create context-aware prompt
+            context_prompt = f"""You are analyzing frame {current_frame + 1} of {len(video_processor.frames)}.
+            The current frame shows: {video_processor.frame_captions[current_frame]}
             
             Previous context: {' '.join(video_processor.frame_captions[start_idx:current_frame])}
-            Next context: {' '.join(video_processor.frame_captions[current_frame + 1:end_idx])}"""
+            Next context: {' '.join(video_processor.frame_captions[current_frame + 1:end_idx])}
+            
+            Question: {query}"""
             
             # Construct command
             cmd = [
@@ -799,16 +797,15 @@ def chat():
                 "--temp", str(video_processor.minicpmv_processor.temp),
                 "--ctx-size", "8192",
                 "--top-p", str(video_processor.minicpmv_processor.top_p),
-                "--top-k", str(video_processor.minicpmv_processor.top_k),
-                "--system", system_prompt
+                "--top-k", str(video_processor.minicpmv_processor.top_k)
             ]
             
             # Add images
             for temp_path in temp_paths:
                 cmd.extend(["--image", temp_path])
             
-            # Add query
-            cmd.extend(["-p", query])
+            # Add query with context
+            cmd.extend(["-p", context_prompt])
             
             # Run command
             result = subprocess.run(
