@@ -512,6 +512,7 @@ class VideoProcessor:
             # Get video properties
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             fps = cap.get(cv2.CAP_PROP_FPS)
+            print(f"Video properties: {total_frames} frames, {fps} fps")
             
             # Calculate frame sampling interval (1 frame per second)
             sample_interval = max(1, int(fps))
@@ -522,14 +523,17 @@ class VideoProcessor:
                 gap = len(frame_indices) / 32
                 frame_indices = [frame_indices[int(i * gap + gap / 2)] for i in range(32)]
             
+            print(f"Will process {len(frame_indices)} frames")
             processed_frames = []
             processed_captions = []
             
             # Process frames one at a time
-            for frame_idx in frame_indices:
+            for i, frame_idx in enumerate(frame_indices):
+                print(f"\nProcessing frame {i+1}/{len(frame_indices)} (frame index: {frame_idx})")
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
                 ret, frame = cap.read()
                 if not ret:
+                    print(f"Failed to read frame {frame_idx}")
                     continue
                 
                 # Convert BGR to RGB and resize
@@ -538,9 +542,11 @@ class VideoProcessor:
                 
                 # Save frame as temporary image
                 temp_path = os.path.join(self.temp_dir, f"frame_{int(time.time() * 1000)}.jpg")
+                print(f"Saving frame to {temp_path}")
                 success = cv2.imwrite(temp_path, cv2.cvtColor(frame_resized, cv2.COLOR_RGB2BGR))
                 
                 if not success:
+                    print(f"Failed to save frame to {temp_path}")
                     continue
                 
                 try:
@@ -559,11 +565,12 @@ class VideoProcessor:
                         "-p", "What's happening in this frame?"
                     ]
                     
+                    print(f"Running command: {' '.join(cmd)}")
                     result = subprocess.run(
                         cmd,
                         capture_output=True,
                         text=True,
-                        timeout=60
+                        timeout=180  # Increased timeout
                     )
                     
                     if result.returncode == 0 and result.stdout:
@@ -578,15 +585,23 @@ class VideoProcessor:
                         
                         processed_frames.append(frame_resized)
                         processed_captions.append(response)
-                        print(f"\rProcessed {len(processed_frames)}/{len(frame_indices)} frames ✓", end='', flush=True)
+                        print(f"Successfully processed frame {i+1}/{len(frame_indices)}")
+                    else:
+                        print(f"Command failed with code {result.returncode}")
+                        print(f"Error output: {result.stderr}")
                         
+                except subprocess.TimeoutExpired:
+                    print(f"Timeout processing frame {i+1}/{len(frame_indices)}")
+                except Exception as e:
+                    print(f"Error processing frame: {str(e)}")
                 finally:
                     # Clean up temp file
                     try:
                         if os.path.exists(temp_path):
                             os.remove(temp_path)
-                    except:
-                        pass
+                            print(f"Cleaned up {temp_path}")
+                    except Exception as e:
+                        print(f"Failed to clean up {temp_path}: {str(e)}")
             
             cap.release()
             
@@ -609,8 +624,8 @@ class VideoProcessor:
                 for file in os.listdir(self.temp_dir):
                     if file.endswith('.jpg'):
                         os.remove(os.path.join(self.temp_dir, file))
-            except:
-                pass
+            except Exception as e:
+                print(f"Error cleaning up temp files: {str(e)}")
 
 # ------------------------------------------------------------------------------
 # ROUTES
