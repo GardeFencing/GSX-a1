@@ -570,17 +570,18 @@ class VideoProcessor:
                         continue
                     temp_paths.append(temp_path)
                 
-                # Construct command for all frames
+                # Construct command for all frames using official format
                 cmd = [
                     self.cli_path,
                     "-m", self.model_path,
                     "--mmproj", self.mmproj_path,
                     "-t", "4",  # Fixed thread count
-                    "-n", "256",
-                    "--temp", "0.1",
-                    "--ctx-size", "8192",  # Increased for multiple frames
-                    "--top-p", "0.7",
-                    "--top-k", "40"
+                    "-c", "4096",  # Context size
+                    "-n", "256",  # Max tokens
+                    "--temp", "0.7",
+                    "--top-p", "0.8",
+                    "--top-k", "100",
+                    "--repeat-penalty", "1.05"  # Add repeat penalty
                 ]
                 
                 # Add all images
@@ -592,12 +593,12 @@ class VideoProcessor:
                 
                 print("Running command:", " ".join(cmd))
                 
-                # Run command
+                # Run command with increased timeout for multiple frames
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,
-                    timeout=180,  # 3 minutes for all frames
+                    timeout=300,  # 5 minutes for all frames
                     check=True
                 )
                 
