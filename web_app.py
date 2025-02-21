@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 from dataclasses import dataclass
 from typing import List, Tuple, Dict, Optional, Any
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 import time
 import asyncio
@@ -626,7 +626,7 @@ class VideoProcessor:
             
             # Collect results in order
             captions = [None] * len(frames_with_indices)
-            for future in concurrent.futures.as_completed(future_to_frame):
+            for future in as_completed(future_to_frame):
                 idx = future_to_frame[future]
                 try:
                     caption = future.result()
