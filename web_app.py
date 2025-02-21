@@ -717,7 +717,7 @@ class VideoProcessor:
             
             for i, frame_idx in enumerate(frame_indices):
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                    ret, frame = cap.read()
+                ret, frame = cap.read()
                 if ret:
                     # Skip if too similar to previous frame
                     if prev_frame is not None:
@@ -726,7 +726,7 @@ class VideoProcessor:
                             logger.info(f"Skipping frame {i} (too similar to previous)")
                             continue
                     
-                            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     frames_with_indices.append((frame_rgb, len(self.frames)))
                     self.frames.append(frame_rgb)
                     prev_frame = frame
@@ -755,7 +755,7 @@ class VideoProcessor:
                     caption = future.result()
                     self.frame_captions[idx] = caption
                     logger.info(f"Caption generated for frame {idx}")
-                        except Exception as e:
+                except Exception as e:
                     logger.error(f"Error processing frame {idx}: {str(e)}")
                     self.frame_captions[idx] = f"Error: {str(e)}"
             
@@ -955,12 +955,12 @@ def chat():
                     last_error = f"Command failed: {e.stderr}"
                     logger.warning(f"Command failed on attempt {retry_count}: {e.stderr}")
                     time.sleep(1)
-                        continue
-                        
+                    continue
+                    
                 except Exception as e:
                     logger.error(f"Unexpected error in chat: {str(e)}")
-                        return jsonify({'error': str(e)}), 500
-                    
+                    return jsonify({'error': str(e)}), 500
+            
             # If we get here, all retries failed
             logger.error(f"All chat retries failed. Last error: {last_error}")
             return jsonify({'error': last_error or 'Failed to process request'}), 500
@@ -970,7 +970,7 @@ def chat():
             if os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
-        except Exception as e:
+                except Exception as e:
                     logger.error(f"Failed to clean up temp file: {str(e)}")
                     
     except Exception as e:
@@ -1059,4 +1059,4 @@ def test_caption():
         }), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000) 
+    app.run(debug=True, port=5000)
