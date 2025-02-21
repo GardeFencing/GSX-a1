@@ -34,8 +34,20 @@ class VideoAnalyzer:
         if not os.path.exists(self.mmproj_path):
             raise RuntimeError(f"MM project model not found at {self.mmproj_path}")
 
+    def _enhance_prompt(self, query: str) -> str:
+        """Enhance the prompt with fencing context"""
+        system_context = """You are an expert fencing coach with deep knowledge of classical and modern fencing techniques. 
+        When analyzing video, focus on:
+        1. Precise technical execution
+        2. Body mechanics and positioning
+        3. Tactical decision-making
+        4. Areas for improvement
+        Keep your analysis clear, specific, and actionable."""
+        
+        return f"{system_context}\n\nAnalyze this video: {query}"
+
     def analyze_video(self, video_path, query):
-        """Analyze video using MiniCPM-V"""
+        """Analyze video using MiniCPM-V with optimized parameters"""
         try:
             # Convert video path to absolute path relative to base directory
             abs_video_path = os.path.abspath(video_path)
@@ -44,17 +56,22 @@ class VideoAnalyzer:
 
             logger.info(f"Analyzing video: {abs_video_path}")
             
+            # Enhanced prompt with fencing context
+            enhanced_prompt = self._enhance_prompt(query)
+            
+            # Optimized parameters based on MiniCPM recommendations
             cmd = [
                 "./llama-minicpmv-cli",
                 "-m", self.model_path,
                 "--mmproj", self.mmproj_path,
-                "-c", "4096",  # Reduced from 8192 for faster processing
+                "-c", "2048",  # Reduced for faster processing
+                "--max-slice-nums", "9",  # MiniCPM recommended
                 "--temp", "0.7",
                 "--top-p", "0.8",
-                "--top-k", "40",  # Reduced from 100 for faster processing
+                "--top-k", "20",  # Reduced for faster generation
                 "--repeat-penalty", "1.05",
                 "--video", abs_video_path,
-                "-p", query
+                "-p", enhanced_prompt
             ]
             
             logger.info(f"Running command: {' '.join(cmd)}")
@@ -65,7 +82,8 @@ class VideoAnalyzer:
                 cwd=self.llama_cpp_path,
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
+                timeout=60  # Add timeout to prevent hanging
             )
             
             # Check if output is empty or contains error messages
@@ -75,6 +93,9 @@ class VideoAnalyzer:
             
             return output
             
+        except subprocess.TimeoutExpired:
+            logger.error("Video analysis timed out")
+            raise RuntimeError("Video analysis took too long. Please try with a shorter video.")
         except subprocess.CalledProcessError as e:
             logger.error(f"Error running video analysis: {e.stderr}")
             raise RuntimeError(f"Video analysis failed: {e.stderr}")
@@ -121,7 +142,7 @@ def upload_video():
         file_size = os.path.getsize(video_path)
         logger.info(f"Video file size: {file_size} bytes")
         
-        # Perform initial analysis with coaching prompt
+        # Initial analysis with coaching prompt
         logger.info("Starting initial video analysis...")
         initial_analysis = video_analyzer.analyze_video(
             video_path,
@@ -154,12 +175,10 @@ def chat():
         logger.info(f"Processing chat query for video: {video_analyzer.current_video}")
         logger.info(f"Query: {data['query']}")
         
-        # Keep the query simple but focused on fencing
-        query = f"As a fencing coach, analyze this aspect: {data['query']}"
-        
+        # The _enhance_prompt method will automatically add fencing context
         response = video_analyzer.analyze_video(
             video_analyzer.current_video,
-            query
+            data['query']
         )
         
         logger.info("Chat response generated successfully")
