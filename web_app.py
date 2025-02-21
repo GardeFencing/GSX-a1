@@ -524,65 +524,92 @@ class VideoProcessor:
             success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
                                 [cv2.IMWRITE_JPEG_QUALITY, 95])
             if not success:
+                logger.error(f"Failed to save frame {frame_idx} to {temp_path}")
                 return "Failed to save frame"
+            
+            # Log paths for debugging
+            logger.info(f"Processing frame {frame_idx} with paths:")
+            logger.info(f"CLI path: {self.cli_path}")
+            logger.info(f"Model path: {self.model_path}")
+            logger.info(f"MMPROJ path: {self.mmproj_path}")
+            logger.info(f"Frame path: {temp_path}")
+            
+            # Verify file existence
+            if not os.path.exists(self.cli_path):
+                logger.error(f"CLI executable not found at {self.cli_path}")
+                return "Error: CLI executable not found"
+            if not os.path.exists(self.model_path):
+                logger.error(f"Model file not found at {self.model_path}")
+                return "Error: Model file not found"
+            if not os.path.exists(self.mmproj_path):
+                logger.error(f"MMPROJ file not found at {self.mmproj_path}")
+                return "Error: MMPROJ file not found"
             
             # Construct command with GPU acceleration
             cmd = [
                 self.cli_path,
                 "-m", self.model_path,
                 "--mmproj", self.mmproj_path,
-                "-t", str(max(1, os.cpu_count() // 2)),  # Optimize thread count
+                "-t", str(max(1, os.cpu_count() // 2)),
                 "-n", "256",
                 "--temp", "0.1",
                 "--ctx-size", "2048",
                 "--top-p", "0.7",
                 "--top-k", "40",
-                "--gpu-layers", "35",  # Enable GPU acceleration
-                "-ngl", "35",  # Number of GPU layers
                 "--image", temp_path,
                 "-p", "Describe what is happening in this frame."
             ]
             
-            logger.info(f"Processing frame {frame_idx} at time {frame_idx/fps:.2f}s")
+            logger.info(f"Running command for frame {frame_idx}: {' '.join(cmd)}")
             
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=180,  # Increased timeout for complex frames
-                check=False
+                timeout=180,
+                check=True
             )
             
             if result.returncode != 0:
+                logger.error(f"Command failed for frame {frame_idx} with code {result.returncode}")
+                logger.error(f"Error output: {result.stderr}")
                 return f"Error: Command failed with code {result.returncode}"
             
             # Process output to extract caption
             lines = result.stdout.split('\n')
             caption_lines = []
             for line in lines:
-                if line and not line.startswith('>') and not line.startswith('llama_print_timings'):
+                if line and not line.startswith('>') and not line.startswith('llama_print'):
                     caption_lines.append(line.strip())
             
-            return " ".join(caption_lines)
+            caption = " ".join(caption_lines)
+            if not caption:
+                logger.error(f"No caption generated for frame {frame_idx}")
+                return "Error: No caption generated"
+            
+            logger.info(f"Successfully generated caption for frame {frame_idx}")
+            return caption
             
         except subprocess.TimeoutExpired:
+            logger.error(f"Timeout processing frame {frame_idx}")
             return "Error: Frame processing timed out"
         except Exception as e:
+            logger.error(f"Error processing frame {frame_idx}: {str(e)}")
             return f"Error: {str(e)}"
         finally:
             # Cleanup temporary file
             if os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"Failed to clean up temp file {temp_path}: {str(e)}")
     
     def process_video(self, video_path: str) -> None:
         """Process video file with optimized frame extraction and GPU acceleration"""
         try:
-            print("\n" + "="*50)
-            print("Starting optimized video processing...")
-            print("="*50)
+            logger.info("\n" + "="*50)
+            logger.info("Starting video processing...")
+            logger.info("="*50)
             
             # Reset state
             self.frames = []
@@ -597,25 +624,30 @@ class VideoProcessor:
             # Get video properties
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             fps = cap.get(cv2.CAP_PROP_FPS)
+            duration = total_frames / fps
             
-            # Calculate frame sampling interval (1 frame per second)
-            sample_interval = max(1, int(fps))
-            frame_indices = list(range(0, total_frames, sample_interval))
+            logger.info(f"Video properties:")
+            logger.info(f"- Total frames: {total_frames}")
+            logger.info(f"- FPS: {fps}")
+            logger.info(f"- Duration: {duration:.2f} seconds")
             
-            # Uniformly sample frames if too many
+            # Sample 1 frame per second
+            frame_times = np.arange(0, duration, 1.0)  # One frame per second
+            frame_indices = (frame_times * fps).astype(int)
+            
+            # Cap at MAX_FRAMES if needed
             if len(frame_indices) > self.MAX_FRAMES:
-                frame_indices = self.uniform_sample(frame_indices, self.MAX_FRAMES)
+                logger.info(f"Limiting frames from {len(frame_indices)} to {self.MAX_FRAMES}")
+                step = len(frame_indices) // self.MAX_FRAMES
+                frame_indices = frame_indices[::step][:self.MAX_FRAMES]
             
-            print(f"\nOptimized frame extraction plan:")
-            print(f"- Total frames in video: {total_frames}")
-            print(f"- FPS: {fps}")
-            print(f"- Selected frames: {len(frame_indices)}")
+            logger.info(f"Will process {len(frame_indices)} frames")
             
-            # Extract frames with similarity detection
+            # Extract frames
             frames_with_indices = []
             prev_frame = None
             
-            for frame_idx in frame_indices:
+            for i, frame_idx in enumerate(frame_indices):
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
                 ret, frame = cap.read()
                 if ret:
@@ -623,50 +655,53 @@ class VideoProcessor:
                     if prev_frame is not None:
                         diff = self._calculate_frame_difference(frame, prev_frame)
                         if diff < self.FRAME_DIFFERENCE_THRESHOLD:
+                            logger.info(f"Skipping frame {i} (too similar to previous)")
                             continue
                     
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    frames_with_indices.append((frame_rgb, len(self.frames)))  # Use sequential index
+                    frames_with_indices.append((frame_rgb, len(self.frames)))
                     self.frames.append(frame_rgb)
                     prev_frame = frame
+                    logger.info(f"Processing frame {len(self.frames)-1} at time {frame_idx/fps:.2f}s")
             
             cap.release()
             
             if not frames_with_indices:
                 raise ValueError("No frames were extracted")
             
-            # Process frames in parallel with improved error handling
-            print("\nProcessing frames with GPU acceleration...")
+            # Initialize captions list with the correct size
+            self.frame_captions = [None] * len(self.frames)
+            
+            logger.info(f"\nProcessing {len(frames_with_indices)} frames with captions...")
+            
+            # Process frames in parallel
             future_to_frame = {
                 self.executor.submit(self.process_single_frame, frame, idx, fps): idx 
                 for frame, idx in frames_with_indices
             }
             
-            # Initialize captions list with the correct size
-            self.frame_captions = [None] * len(self.frames)
-            
-            # Collect results in order
+            # Collect results
             for future in as_completed(future_to_frame):
                 try:
                     idx = future_to_frame[future]
                     caption = future.result()
                     self.frame_captions[idx] = caption
-                    print(f"Processed frame {idx+1}/{len(self.frames)}")
+                    logger.info(f"Caption generated for frame {idx}")
                 except Exception as e:
-                    print(f"Error processing frame {idx}: {str(e)}")
+                    logger.error(f"Error processing frame {idx}: {str(e)}")
                     self.frame_captions[idx] = f"Error: {str(e)}"
             
             # Mark processing as complete
             self.processing_complete = True
             
-            print("\n" + "="*50)
-            print("Video processing completed with GPU acceleration!")
-            print(f"Total frames processed: {len(self.frames)}")
-            print(f"Total captions generated: {len(self.frame_captions)}")
-            print("="*50)
+            logger.info("\n" + "="*50)
+            logger.info("Video processing completed!")
+            logger.info(f"Total frames processed: {len(self.frames)}")
+            logger.info(f"Total captions generated: {len(self.frame_captions)}")
+            logger.info("="*50)
             
         except Exception as e:
-            print(f"\nError in process_video: {str(e)}")
+            logger.error(f"Error in process_video: {str(e)}")
             self.processing_complete = False
             raise
 
@@ -730,24 +765,43 @@ def chat():
         
         # Check video processor state
         if not video_processor:
+            logger.error("Chat request failed: Video processor not initialized")
             return jsonify({'error': 'Please upload a video first'}), 400
             
         if not video_processor.processing_complete:
+            logger.error("Chat request failed: Video still processing")
             return jsonify({'error': 'Video is still processing'}), 400
             
         # Validate request data
         if not request.is_json:
+            logger.error("Chat request failed: Not JSON")
             return jsonify({'error': 'Request must be JSON'}), 400
             
         data = request.get_json()
-        if not data or 'query' not in data:
+        logger.info(f"Chat request data: {data}")
+        
+        if not data:
+            logger.error("Chat request failed: Empty request data")
+            return jsonify({'error': 'No request data provided'}), 400
+            
+        if 'query' not in data:
+            logger.error("Chat request failed: No query provided")
             return jsonify({'error': 'No query provided'}), 400
             
         query = data['query']
         current_frame = data.get('current_frame', 0)
         
         # Validate frame index
+        if not isinstance(current_frame, int):
+            logger.error(f"Chat request failed: Invalid frame index type: {type(current_frame)}")
+            return jsonify({'error': 'Frame index must be an integer'}), 400
+            
+        if current_frame < 0:
+            logger.error(f"Chat request failed: Negative frame index: {current_frame}")
+            return jsonify({'error': 'Frame index cannot be negative'}), 400
+            
         if current_frame >= len(video_processor.frames):
+            logger.error(f"Chat request failed: Frame index {current_frame} out of range")
             return jsonify({'error': 'Invalid frame index'}), 400
             
         # Get current frame
@@ -759,6 +813,7 @@ def chat():
             # Save frame
             success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
             if not success:
+                logger.error("Failed to save frame for chat")
                 return jsonify({'error': 'Failed to save frame'}), 500
             
             # Construct command
@@ -772,11 +827,11 @@ def chat():
                 "--ctx-size", "2048",
                 "--top-p", "0.7",
                 "--top-k", "40",
-                "--gpu-layers", "35",
-                "-ngl", "35",
                 "--image", temp_path,
                 "-p", query
             ]
+            
+            logger.info(f"Running chat command: {' '.join(cmd)}")
             
             # Execute command with retries
             max_retries = 3
@@ -813,27 +868,33 @@ def chat():
                     if not response:
                         retry_count += 1
                         last_error = "Empty response from model"
+                        logger.warning(f"Empty response on attempt {retry_count}")
                         time.sleep(1)
                         continue
                     
+                    logger.info("Successfully generated chat response")
                     return jsonify({'response': response})
                     
                 except subprocess.TimeoutExpired:
                     retry_count += 1
                     last_error = "Request timed out"
+                    logger.warning(f"Timeout on attempt {retry_count}")
                     time.sleep(1)
                     continue
                     
                 except subprocess.CalledProcessError as e:
                     retry_count += 1
                     last_error = f"Command failed: {e.stderr}"
+                    logger.warning(f"Command failed on attempt {retry_count}: {e.stderr}")
                     time.sleep(1)
                     continue
                     
                 except Exception as e:
+                    logger.error(f"Unexpected error in chat: {str(e)}")
                     return jsonify({'error': str(e)}), 500
                     
             # If we get here, all retries failed
+            logger.error(f"All chat retries failed. Last error: {last_error}")
             return jsonify({'error': last_error or 'Failed to process request'}), 500
             
         finally:
@@ -845,7 +906,7 @@ def chat():
                     logger.error(f"Failed to clean up temp file: {str(e)}")
                     
     except Exception as e:
-        logger.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
+        logger.error(f"Error in chat endpoint: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/get_frame/<int:frame_idx>')
