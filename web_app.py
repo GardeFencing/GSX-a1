@@ -99,10 +99,16 @@ def upload_video():
         return jsonify({'error': 'No video file selected'}), 400
     
     try:
+        # Log upload attempt
+        logger.info(f"Processing video upload: {video_file.filename}")
+        
         # Save the uploaded video
         filename = secure_filename(video_file.filename)
         video_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         video_file.save(video_path)
+        
+        # Log successful save
+        logger.info(f"Video saved to: {video_path}")
         
         # Store the current video path
         video_analyzer.current_video = video_path
@@ -111,11 +117,17 @@ def upload_video():
         if not os.path.exists(video_path):
             raise RuntimeError(f"Failed to save video file at {video_path}")
         
+        # Log file size
+        file_size = os.path.getsize(video_path)
+        logger.info(f"Video file size: {file_size} bytes")
+        
         # Perform initial analysis
+        logger.info("Starting initial video analysis...")
         initial_analysis = video_analyzer.analyze_video(
             video_path,
             "Please describe what is happening in this video in detail."
         )
+        logger.info("Initial analysis completed successfully")
         
         return jsonify({
             'success': True,
@@ -130,18 +142,23 @@ def upload_video():
 def chat():
     if not video_analyzer.current_video:
         return jsonify({'error': 'No video has been uploaded yet'}), 400
-            
-        data = request.get_json()
-        if not data or 'query' not in data:
-            return jsonify({'error': 'No query provided'}), 400
-            
+    
+    data = request.get_json()
+    if not data or 'query' not in data:
+        return jsonify({'error': 'No query provided'}), 400
+    
     try:
+        logger.info(f"Processing chat query for video: {video_analyzer.current_video}")
+        logger.info(f"Query: {data['query']}")
+        
         response = video_analyzer.analyze_video(
             video_analyzer.current_video,
             data['query']
         )
+        
+        logger.info("Chat response generated successfully")
         return jsonify({'response': response})
-            
+        
     except Exception as e:
         logger.error(f"Error processing chat query: {e}")
         return jsonify({'error': str(e)}), 500
