@@ -626,7 +626,7 @@ class VideoProcessor:
                             continue
                     
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    frames_with_indices.append((frame_rgb, frame_idx))
+                    frames_with_indices.append((frame_rgb, len(self.frames)))  # Use sequential index
                     self.frames.append(frame_rgb)
                     prev_frame = frame
             
@@ -642,20 +642,21 @@ class VideoProcessor:
                 for frame, idx in frames_with_indices
             }
             
+            # Initialize captions list with the correct size
+            self.frame_captions = [None] * len(self.frames)
+            
             # Collect results in order
-            captions = [None] * len(self.frames)
             for future in as_completed(future_to_frame):
                 try:
                     idx = future_to_frame[future]
                     caption = future.result()
-                    captions[idx] = caption
+                    self.frame_captions[idx] = caption
                     print(f"Processed frame {idx+1}/{len(self.frames)}")
                 except Exception as e:
                     print(f"Error processing frame {idx}: {str(e)}")
-                    captions[idx] = f"Error: {str(e)}"
+                    self.frame_captions[idx] = f"Error: {str(e)}"
             
-            # Store captions and mark processing as complete
-            self.frame_captions = captions
+            # Mark processing as complete
             self.processing_complete = True
             
             print("\n" + "="*50)
