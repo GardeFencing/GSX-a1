@@ -75,12 +75,12 @@ class MiniCPMVProcessor:
         self.mmproj_path = os.path.join(model_dir, "mmproj-model-f16.gguf")
         self.cli_path = os.path.join(base_dir, "llama.cpp/build/bin/llama-minicpmv-cli")
         
-        # Optimized parameters
-        self.temp = 0.1
-        self.top_p = 0.7
-        self.top_k = 40
-        self.repeat_penalty = 1.1
-        self.context_size = 2048
+        # Updated parameters to match official recommendations
+        self.temp = 0.7  # Updated from 0.1
+        self.top_p = 0.8  # Updated from 0.7
+        self.top_k = 100  # Updated from 40
+        self.repeat_penalty = 1.05  # Updated from 1.1
+        self.context_size = 8192  # Updated from 2048 for video support
         self.n_threads = max(1, os.cpu_count() // 2)
         
         # Create temp directory
@@ -104,13 +104,14 @@ class MiniCPMVProcessor:
         """Process multiple frames with MiniCPM-V"""
         temp_paths = []
         try:
-            # Save frames as temporary images
+            # Save frames as temporary images with high quality
             for i, frame in enumerate(frames):
                 temp_path = os.path.join(self.temp_dir, f"temp_frame_{int(time.time() * 1000)}_{i}.jpg")
                 success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
                                     [cv2.IMWRITE_JPEG_QUALITY, 95])
                 
                 if not success or not os.path.exists(temp_path):
+                    logger.error(f"Failed to save frame {i} to {temp_path}")
                     continue
                     
                 temp_paths.append(temp_path)
@@ -118,17 +119,18 @@ class MiniCPMVProcessor:
             if not temp_paths:
                 return "Error: Failed to save frames"
             
-            # Construct command with multi-image support
+            # Construct command with updated parameters
             cmd = [
                 self.cli_path,
                 "-m", os.path.abspath(self.model_path),
                 "--mmproj", os.path.abspath(self.mmproj_path),
                 "-t", str(self.n_threads),
-                "-n", "256",  # Increased token limit for multi-image
+                "-c", str(self.context_size),  # Use -c instead of --ctx-size
                 "--temp", str(self.temp),
-                "--ctx-size", "8192",  # Increased context for multi-image
                 "--top-p", str(self.top_p),
-                "--top-k", str(self.top_k)
+                "--top-k", str(self.top_k),
+                "--repeat-penalty", str(self.repeat_penalty),
+                "-n", "512"  # Increased token limit for multi-frame
             ]
             
             # Add system prompt if provided
@@ -142,6 +144,8 @@ class MiniCPMVProcessor:
             # Add query
             cmd.extend(["-p", query])
             
+            logger.info(f"Running command: {' '.join(cmd)}")
+            
             # Run the command with retry mechanism
             max_retries = 3
             retry_count = 0
@@ -151,37 +155,65 @@ class MiniCPMVProcessor:
                         cmd, 
                         capture_output=True, 
                         text=True, 
-                        timeout=180,  # Increased from 60 to 180 seconds (3 minutes) per frame
+                        timeout=180,  # 3 minutes timeout
                         cwd=os.getcwd()
                     )
                     
                     # Process output
                     if result.returncode == 0 and result.stdout:
-                        response = result.stdout.strip()
-                        # Clean up the response
-                        response = ' '.join(
-                            line.strip() for line in response.split('\n') 
-                            if line.strip() 
-                            and not any(x in line.lower() for x in 
-                                      ['loading', 'llama_print', 'log start', 'clip_model', 
-                                       'user:', 'assistant:', '<user>', '<assistant>'])
-                        )
-                        return response if response else "Error: No caption generated"
-                    else:
+                        lines = result.stdout.split('\n')
+                        response_lines = []
+                        capture_mode = False
+                        
+                        for line in lines:
+                            line = line.strip()
+                            # Start capturing after assistant tag
+                            if '<assistant>' in line.lower():
+                                capture_mode = True
+                                continue
+                            # Stop capturing at these markers
+                            if any(x in line.lower() for x in ['<user>', 'llama_print', '<end>']):
+                                capture_mode = False
+                                continue
+                            # Skip initialization lines
+                            if any(x in line.lower() for x in [
+                                'clip_model_load', 'loading', 'system_info:', 
+                                'ggml', 'llama', '<start>', '<|im_start|', '<|im_end|'
+                            ]):
+                                continue
+                            # Capture actual caption content
+                            if capture_mode and line:
+                                response_lines.append(line)
+                        
+                        response = " ".join(response_lines).strip()
+                        if response:
+                            logger.info(f"Generated response: {response[:100]}...")
+                            return response
+                        
                         retry_count += 1
                         if retry_count < max_retries:
-                            time.sleep(1)  # Wait before retrying
+                            time.sleep(2)
                             continue
-                        return f"Error: Command failed with code {result.returncode}"
+                        return "Error: No valid response generated"
                         
                 except subprocess.TimeoutExpired:
                     retry_count += 1
                     if retry_count < max_retries:
-                        time.sleep(1)  # Wait before retrying
+                        time.sleep(2)
                         continue
                     return "Error: Processing timeout after retries"
                     
+                except Exception as e:
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        time.sleep(2)
+                        continue
+                    return f"Error: {str(e)}"
+            
+            return "Error: All retries failed"
+            
         except Exception as e:
+            logger.error(f"Error in process_frames: {str(e)}")
             return f"Error: {str(e)}"
             
         finally:
@@ -190,12 +222,120 @@ class MiniCPMVProcessor:
                 try:
                     if os.path.exists(temp_path):
                         os.remove(temp_path)
-                except:
-                    pass
+                        logger.debug(f"Cleaned up temp file: {temp_path}")
+                except Exception as e:
+                    logger.error(f"Failed to clean up temp file {temp_path}: {str(e)}")
     
     def process_frame(self, frame: np.ndarray, query: str = "Describe this image briefly.") -> str:
         """Process a single frame with MiniCPM-V (legacy method)"""
         return self.process_frames([frame], query=query)
+    
+    def process_video(self, video_path: str, query: str = "Describe what is happening in this video.") -> str:
+        """Process a video file directly with MiniCPM-V"""
+        try:
+            # Verify file existence
+            if not os.path.exists(self.cli_path):
+                logger.error(f"CLI executable not found at {self.cli_path}")
+                return "Error: CLI executable not found"
+            if not os.path.exists(self.model_path):
+                logger.error(f"Model file not found at {self.model_path}")
+                return "Error: Model file not found"
+            if not os.path.exists(self.mmproj_path):
+                logger.error(f"MMPROJ file not found at {self.mmproj_path}")
+                return "Error: MMPROJ file not found"
+            if not os.path.exists(video_path):
+                logger.error(f"Video file not found at {video_path}")
+                return "Error: Video file not found"
+            
+            # Construct command with optimized parameters
+            cmd = [
+                self.cli_path,
+                "-m", os.path.abspath(self.model_path),
+                "--mmproj", os.path.abspath(self.mmproj_path),
+                "-t", str(max(1, os.cpu_count() // 2)),
+                "-c", "8192",
+                "--temp", "0.7",
+                "--top-p", "0.8",
+                "--top-k", "100",
+                "--repeat-penalty", "1.05",
+                "--video", os.path.abspath(video_path),
+                "-p", query
+            ]
+            
+            logger.info(f"Running video processing command: {' '.join(cmd)}")
+            
+            # Run command with retries and proper error handling
+            max_retries = 3
+            retry_count = 0
+            while retry_count < max_retries:
+                try:
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=300,  # 5 minutes timeout for video
+                        check=False
+                    )
+                    
+                    # Process output
+                    if result.stdout:
+                        lines = result.stdout.split('\n')
+                        response_lines = []
+                        capture_mode = False
+                        
+                        for line in lines:
+                            line = line.strip()
+                            # Start capturing after assistant tag
+                            if '<assistant>' in line.lower():
+                                capture_mode = True
+                                continue
+                            # Stop capturing at these markers
+                            if any(x in line.lower() for x in ['<user>', 'llama_print', '<end>']):
+                                capture_mode = False
+                                continue
+                            # Skip initialization lines
+                            if any(x in line.lower() for x in [
+                                'clip_model_load', 'loading', 'system_info:', 
+                                'ggml', 'llama', '<start>', '<|im_start|', '<|im_end|'
+                            ]):
+                                continue
+                            # Capture actual response content
+                            if capture_mode and line:
+                                response_lines.append(line)
+                        
+                        response = " ".join(response_lines).strip()
+                        if response:
+                            logger.info(f"Generated video response: {response[:100]}...")
+                            return response
+                    
+                    # If we get here, retry
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        time.sleep(2)
+                        continue
+                    return "Error: No response generated"
+                    
+                except subprocess.TimeoutExpired:
+                    logger.error(f"Timeout processing video (attempt {retry_count + 1})")
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        time.sleep(2)
+                        continue
+                    return "Error: Video processing timed out"
+                    
+                except Exception as e:
+                    logger.error(f"Error processing video: {str(e)}")
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        time.sleep(2)
+                        continue
+                    return f"Error: {str(e)}"
+            
+            return "Error: All retries failed"
+            
+        except Exception as e:
+            logger.error(f"Error in video processing: {str(e)}")
+            return f"Error: {str(e)}"
 
 # ------------------------------------------------------------------------------
 # BIOMECHANICAL ANALYSIS
@@ -598,16 +738,27 @@ class VideoProcessor:
                     if result.stdout:
                         lines = result.stdout.split('\n')
                         caption_lines = []
+                        capture_mode = False
+                        
                         for line in lines:
                             line = line.strip()
-                            # Skip common non-caption lines
-                            if not line or line.startswith('>') or line.startswith('llama_print') or \
-                               line.startswith('system_info:') or line.startswith('<start>') or \
-                               line.startswith('<end>') or line.startswith('<|im_start|') or \
-                               line.startswith('<|im_end|') or line.startswith('Loading') or \
-                               'ggml' in line.lower() or 'llama' in line.lower():
+                            # Start capturing after assistant tag
+                            if '<assistant>' in line.lower():
+                                capture_mode = True
                                 continue
-                            caption_lines.append(line)
+                            # Stop capturing at these markers
+                            if any(x in line.lower() for x in ['<user>', 'llama_print', '<end>']):
+                                capture_mode = False
+                                continue
+                            # Skip initialization lines
+                            if any(x in line.lower() for x in [
+                                'clip_model_load', 'loading', 'system_info:', 
+                                'ggml', 'llama', '<start>', '<|im_start|', '<|im_end|'
+                            ]):
+                                continue
+                            # Capture actual caption content
+                            if capture_mode and line:
+                                caption_lines.append(line)
                         
                         caption = " ".join(caption_lines).strip()
                         if caption:
@@ -764,7 +915,6 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload_video():
-    global video_processor
     try:
         if 'video' not in request.files:
             return jsonify({'error': 'No video file uploaded'}), 400
@@ -777,24 +927,18 @@ def upload_video():
         video_path = os.path.join(app.config['UPLOAD_FOLDER'], video_file.filename)
         video_file.save(video_path)
         
-        # Initialize video processing if not already initialized
-        if video_processor is None:
-            video_processor = VideoProcessor()
+        # Initialize MiniCPM-V processor
+        processor = MiniCPMVProcessor()
         
-        # Process video
+        # Test video processing
         try:
-            video_processor.process_video(video_path)
-            
-            if not video_processor.processing_complete:
-                return jsonify({'error': 'Video processing failed'}), 500
+            response = processor.process_video(video_path, "Briefly describe what this video shows.")
+            if response.startswith("Error:"):
+                return jsonify({'error': response}), 500
                 
-            if not video_processor.frames or not video_processor.frame_captions:
-                return jsonify({'error': 'No frames or captions generated'}), 500
-            
             return jsonify({
                 'message': 'Video processed successfully',
-                'total_frames': len(video_processor.frames),
-                'captions_generated': len(video_processor.frame_captions)
+                'initial_description': response
             })
             
         except Exception as e:
@@ -811,15 +955,6 @@ def chat():
     try:
         logger.info("Chat request received")
         
-        # Check video processor state
-        if not video_processor:
-            logger.error("Chat request failed: Video processor not initialized")
-            return jsonify({'error': 'Please upload a video first'}), 400
-            
-        if not video_processor.processing_complete:
-            logger.error("Chat request failed: Video still processing")
-            return jsonify({'error': 'Video is still processing'}), 400
-            
         # Validate request data
         if not request.is_json:
             logger.error("Chat request failed: Not JSON")
@@ -835,124 +970,31 @@ def chat():
         if 'query' not in data:
             logger.error("Chat request failed: No query provided")
             return jsonify({'error': 'No query provided'}), 400
-            
+        
         query = data['query']
-        current_frame = data.get('current_frame', 0)
         
-        # Validate frame index
-        if not isinstance(current_frame, int):
-            logger.error(f"Chat request failed: Invalid frame index type: {type(current_frame)}")
-            return jsonify({'error': 'Frame index must be an integer'}), 400
-            
-        if current_frame < 0:
-            logger.error(f"Chat request failed: Negative frame index: {current_frame}")
-            return jsonify({'error': 'Frame index cannot be negative'}), 400
-            
-        if current_frame >= len(video_processor.frames):
-            logger.error(f"Chat request failed: Frame index {current_frame} out of range")
-            return jsonify({'error': 'Invalid frame index'}), 400
-            
-        # Get current frame
-        frame = video_processor.frames[current_frame]
+        # Get the latest video file from uploads folder
+        video_files = [f for f in os.listdir(app.config['UPLOAD_FOLDER']) if f.endswith(('.mp4', '.avi', '.mov'))]
+        if not video_files:
+            return jsonify({'error': 'No video file available'}), 400
         
-        # Save frame as temporary image
-        temp_path = os.path.join(video_processor.temp_dir, f"chat_frame_{int(time.time() * 1000)}.jpg")
-        try:
-            # Save frame
-            success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-            if not success:
-                logger.error("Failed to save frame for chat")
-                return jsonify({'error': 'Failed to save frame'}), 500
-            
-            # Construct command
-            cmd = [
-                video_processor.cli_path,
-                "-m", video_processor.model_path,
-                "--mmproj", video_processor.mmproj_path,
-                "-t", str(max(1, os.cpu_count() // 2)),
-                "-n", "256",
-                "--temp", "0.1",
-                "--ctx-size", "2048",
-                "--top-p", "0.7",
-                "--top-k", "40",
-                "--image", temp_path,
-                "-p", query
-            ]
-            
-            logger.info(f"Running chat command: {' '.join(cmd)}")
-            
-            # Execute command with retries
-            max_retries = 3
-            retry_count = 0
-            last_error = None
-            
-            while retry_count < max_retries:
-                try:
-                    result = subprocess.run(
-                        cmd,
-                        capture_output=True,
-                        text=True,
-                        timeout=180,
-                        check=True
-                    )
-                    
-                    # Process output
-                    lines = result.stdout.split('\n')
-                    response_lines = []
-                    capture_response = False
-                    
-                    for line in lines:
-                        line = line.strip()
-                        if '<assistant>' in line.lower():
-                            capture_response = True
-                            continue
-                        if capture_response and ('<user>' in line.lower() or 'llama_print' in line.lower()):
-                            break
-                        if capture_response and line:
-                            response_lines.append(line)
-                    
-                    response = ' '.join(response_lines).strip()
-                    
-                    if not response:
-                        retry_count += 1
-                        last_error = "Empty response from model"
-                        logger.warning(f"Empty response on attempt {retry_count}")
-                        time.sleep(1)
-                        continue
-                    
-                    logger.info("Successfully generated chat response")
-                    return jsonify({'response': response})
-                    
-                except subprocess.TimeoutExpired:
-                    retry_count += 1
-                    last_error = "Request timed out"
-                    logger.warning(f"Timeout on attempt {retry_count}")
-                    time.sleep(1)
-                    continue
-                    
-                except subprocess.CalledProcessError as e:
-                    retry_count += 1
-                    last_error = f"Command failed: {e.stderr}"
-                    logger.warning(f"Command failed on attempt {retry_count}: {e.stderr}")
-                    time.sleep(1)
-                    continue
-                    
-                except Exception as e:
-                    logger.error(f"Unexpected error in chat: {str(e)}")
-                    return jsonify({'error': str(e)}), 500
-            
-            # If we get here, all retries failed
-            logger.error(f"All chat retries failed. Last error: {last_error}")
-            return jsonify({'error': last_error or 'Failed to process request'}), 500
-            
-        finally:
-            # Clean up temp file
-            if os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except Exception as e:
-                    logger.error(f"Failed to clean up temp file: {str(e)}")
-                    
+        video_path = os.path.join(app.config['UPLOAD_FOLDER'], video_files[-1])
+        if not os.path.exists(video_path):
+            return jsonify({'error': 'Video file not found'}), 400
+        
+        # Initialize MiniCPM-V processor
+        minicpmv_processor = MiniCPMVProcessor()
+        
+        # Process the video directly
+        response = minicpmv_processor.process_video(video_path, query)
+        
+        if response.startswith("Error:"):
+            logger.error(f"Video processing failed: {response}")
+            return jsonify({'error': response}), 500
+        
+        logger.info("Successfully generated chat response")
+        return jsonify({'response': response})
+        
     except Exception as e:
         logger.error(f"Error in chat endpoint: {str(e)}")
         return jsonify({'error': str(e)}), 500
@@ -975,12 +1017,18 @@ def get_frame(frame_idx):
         caption = None
         if video_processor.frame_captions and frame_idx < len(video_processor.frame_captions):
             caption = video_processor.frame_captions[frame_idx]
+            
+            # If caption starts with "Error:", log it but don't return it to the user
             if caption and caption.startswith("Error:"):
                 logger.warning(f"Caption error for frame {frame_idx}: {caption}")
-                caption = None
+                caption = "Processing caption..."
+            # If caption contains model initialization text, it wasn't properly filtered
+            elif caption and any(x in caption.lower() for x in ['clip_model_load', 'ggml', 'llama']):
+                logger.warning(f"Invalid caption format for frame {frame_idx}")
+                caption = "Processing caption..."
         
         if caption is None:
-            logger.warning(f"No valid caption available for frame {frame_idx}")
+            logger.warning(f"No caption available for frame {frame_idx}")
             caption = "Processing caption..."
         
         try:
@@ -1002,7 +1050,7 @@ def get_frame(frame_idx):
                 'processing_complete': video_processor.processing_complete
             }
             
-            logger.debug(f"Successfully retrieved frame {frame_idx} with caption")
+            logger.debug(f"Successfully retrieved frame {frame_idx} with caption: {caption[:100]}...")
             return jsonify(response_data)
             
         except Exception as e:
