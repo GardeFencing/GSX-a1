@@ -44,28 +44,32 @@ class VideoAnalyzer:
 
             logger.info(f"Analyzing video: {abs_video_path}")
             
+            # Optimize parameters for faster inference
             cmd = [
                 "./llama-minicpmv-cli",
                 "-m", self.model_path,
                 "--mmproj", self.mmproj_path,
-                "-c", "8192",
-                "--temp", "0.7",
+                "-c", "4096",  # Reduced context size
+                "--temp", "0.2",
                 "--top-p", "0.8",
-                "--top-k", "100",
+                "--top-k", "40",  # Reduced top_k
                 "--repeat-penalty", "1.05",
+                "-t", "4",  # Use 4 threads
+                "-n", "1024",  # Limit token generation
                 "--video", abs_video_path,
                 "-p", query
             ]
             
             logger.info(f"Running command: {' '.join(cmd)}")
             
-            # Run the command from the llama.cpp directory
+            # Run the command from the llama.cpp directory with timeout
             result = subprocess.run(
                 cmd,
                 cwd=self.llama_cpp_path,
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
+                timeout=300  # 5 minute timeout
             )
             
             # Check if output is empty or contains error messages
@@ -75,6 +79,9 @@ class VideoAnalyzer:
             
             return output
             
+        except subprocess.TimeoutExpired:
+            logger.error("Video analysis timed out after 5 minutes")
+            raise RuntimeError("Analysis is taking too long. Please try again with a shorter video.")
         except subprocess.CalledProcessError as e:
             logger.error(f"Error running video analysis: {e.stderr}")
             raise RuntimeError(f"Video analysis failed: {e.stderr}")
@@ -84,6 +91,11 @@ class VideoAnalyzer:
 
 # Initialize the video analyzer
 video_analyzer = VideoAnalyzer()
+
+# Configure Flask app
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+app.config['PERMANENT_SESSION_LIFETIME'] = 600  # 10 minutes
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
 
 @app.route('/')
 def index():
