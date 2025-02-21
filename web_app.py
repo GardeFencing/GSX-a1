@@ -33,11 +33,6 @@ class VideoAnalyzer:
             raise RuntimeError(f"Model file not found at {self.model_path}")
         if not os.path.exists(self.mmproj_path):
             raise RuntimeError(f"MM project model not found at {self.mmproj_path}")
-        
-        # Verify llama-minicpmv-cli exists
-        cli_path = os.path.join(self.llama_cpp_path, "llama-minicpmv-cli")
-        if not os.path.exists(cli_path):
-            raise RuntimeError(f"llama-minicpmv-cli not found at {cli_path}")
 
     def analyze_video(self, video_path, query):
         """Analyze video using MiniCPM-V"""
@@ -48,50 +43,38 @@ class VideoAnalyzer:
                 raise RuntimeError(f"Video file not found at {abs_video_path}")
 
             logger.info(f"Analyzing video: {abs_video_path}")
-            logger.info(f"Video file size: {os.path.getsize(abs_video_path)} bytes")
             
-            # Use original parameters that are known to work
             cmd = [
                 "./llama-minicpmv-cli",
                 "-m", self.model_path,
                 "--mmproj", self.mmproj_path,
-                "-c", "8192",        # Original context size
-                "--temp", "0.7",     # Original temperature
+                "-c", "8192",
+                "--temp", "0.7",
                 "--top-p", "0.8",
-                "--top-k", "100",    # Original top_k
+                "--top-k", "100",
                 "--repeat-penalty", "1.05",
-                "--video", abs_video_path,  # Use --video flag
+                "--video", abs_video_path,
                 "-p", query
             ]
             
             logger.info(f"Running command: {' '.join(cmd)}")
             
-            # Run the command from the llama.cpp directory with timeout
+            # Run the command from the llama.cpp directory
             result = subprocess.run(
                 cmd,
                 cwd=self.llama_cpp_path,
                 capture_output=True,
                 text=True,
-                check=True,
-                timeout=300  # 5 minute timeout
+                check=True
             )
             
             # Check if output is empty or contains error messages
             output = result.stdout.strip()
-            if not output:
-                raise RuntimeError("No output generated from video analysis")
-            if "error" in output.lower():
+            if not output or "error" in output.lower():
                 raise RuntimeError(f"Failed to analyze video. Output: {output}")
-            
-            # Log success
-            logger.info("Video analysis completed successfully")
-            logger.info(f"Output length: {len(output)} characters")
             
             return output
             
-        except subprocess.TimeoutExpired:
-            logger.error("Video analysis timed out after 5 minutes")
-            raise RuntimeError("Analysis is taking too long. Please try again with a shorter video.")
         except subprocess.CalledProcessError as e:
             logger.error(f"Error running video analysis: {e.stderr}")
             raise RuntimeError(f"Video analysis failed: {e.stderr}")
@@ -102,22 +85,17 @@ class VideoAnalyzer:
 # Initialize the video analyzer
 video_analyzer = VideoAnalyzer()
 
-# Configure Flask app
-app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
-app.config['PERMANENT_SESSION_LIFETIME'] = 600  # 10 minutes
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
-
 @app.route('/')
 def index():
     return render_template('index.html')
 
 @app.route('/upload', methods=['POST'])
 def upload_video():
-    if 'video' not in request.files:
+        if 'video' not in request.files:
         return jsonify({'error': 'No video file provided'}), 400
-    
-    video_file = request.files['video']
-    if video_file.filename == '':
+            
+        video_file = request.files['video']
+        if video_file.filename == '':
         return jsonify({'error': 'No video file selected'}), 400
     
     try:
@@ -143,19 +121,26 @@ def upload_video():
         file_size = os.path.getsize(video_path)
         logger.info(f"Video file size: {file_size} bytes")
         
-        # Generate initial coach's report
-        logger.info("Generating initial coach's report...")
-        initial_report = video_analyzer.analyze_video(
+        # Perform initial analysis with coaching prompt
+        logger.info("Starting initial video analysis...")
+        initial_analysis = video_analyzer.analyze_video(
             video_path,
-            """As a fencing coach, give me a detailed but conversational analysis of this video. Focus on the fencer's technique, what they're doing well, and specific areas where they could improve. Include clear, actionable feedback that would help them enhance their performance."""
+            """As an expert fencing coach, provide a detailed analysis report of this video. Include:
+            1. Overview of the technique(s) demonstrated
+            2. Technical execution analysis (body position, footwork, blade work)
+            3. Key strengths observed
+            4. Areas for improvement
+            5. Specific recommendations for practice
+            
+            Format this as a structured coaching report."""
         )
-        logger.info("Initial report generated successfully")
-        
-        return jsonify({
+        logger.info("Initial analysis completed successfully")
+            
+            return jsonify({
             'success': True,
-            'report': initial_report
-        })
-        
+            'analysis': initial_analysis
+            })
+            
     except Exception as e:
         logger.error(f"Error processing video: {e}")
         return jsonify({'error': str(e)}), 500
@@ -164,17 +149,25 @@ def upload_video():
 def chat():
     if not video_analyzer.current_video:
         return jsonify({'error': 'No video has been uploaded yet'}), 400
-    
-    data = request.get_json()
-    if not data or 'query' not in data:
-        return jsonify({'error': 'No query provided'}), 400
-    
+            
+        data = request.get_json()
+        if not data or 'query' not in data:
+            return jsonify({'error': 'No query provided'}), 400
+            
     try:
         logger.info(f"Processing chat query for video: {video_analyzer.current_video}")
         logger.info(f"Query: {data['query']}")
         
         # Enhance the query with coaching context
-        coaching_query = f"""As a fencing coach watching this video, {data['query']} Give specific, practical advice based on what you observe."""
+        coaching_query = f"""As an expert fencing coach analyzing this video, {data['query']}
+
+        Consider:
+        - Technical execution
+        - Body mechanics
+        - Timing and distance
+        - Strategic implications
+        
+        Provide specific, actionable feedback in your response."""
         
         response = video_analyzer.analyze_video(
             video_analyzer.current_video,
