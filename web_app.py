@@ -230,7 +230,7 @@ class MiniCPMVProcessor:
         """Process a single frame with MiniCPM-V (legacy method)"""
         return self.process_frames([frame], query=query)
     
-    def process_video(self, video_path: str, query: str = "Describe what is happening in this video.") -> str:
+    def process_video(self, video_path: str, query: str = "In this video of fencing, what do you see?") -> str:
         """Process a video file directly with MiniCPM-V"""
         try:
             # Verify file existence
@@ -247,18 +247,21 @@ class MiniCPMVProcessor:
                 logger.error(f"Video file not found at {video_path}")
                 return "Error: Video file not found"
             
-            # Construct command with optimized parameters
+            # Ensure model files have execute permissions
+            os.chmod(self.model_path, 0o755)
+            os.chmod(self.mmproj_path, 0o755)
+            
+            # Construct command with correct flags
             cmd = [
-                self.cli_path,
-                "-m", os.path.abspath(self.model_path),
-                "--mmproj", os.path.abspath(self.mmproj_path),
-                "-t", str(max(1, os.cpu_count() // 2)),
+                "./llama.cpp/build/bin/llama-minicpmv-cli",
+                "-m", "./MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf",
+                "--mmproj", "./MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf",
                 "-c", "8192",
                 "--temp", "0.7",
                 "--top-p", "0.8",
                 "--top-k", "100",
                 "--repeat-penalty", "1.05",
-                "--video", os.path.abspath(video_path),
+                "-v", os.path.abspath(video_path),  # Changed --video to -v
                 "-p", query
             ]
             
@@ -274,7 +277,8 @@ class MiniCPMVProcessor:
                         capture_output=True,
                         text=True,
                         timeout=300,  # 5 minutes timeout for video
-                        check=False
+                        check=False,
+                        cwd=os.getcwd()  # Run from project root directory
                     )
                     
                     # Process output
@@ -789,7 +793,7 @@ class VideoProcessor:
                     return f"Error: {str(e)}"
             
             return "Error: All retries failed"
-            
+                
         except Exception as e:
             logger.error(f"Error in frame processing setup: {str(e)}")
             return f"Error: {str(e)}"
@@ -848,7 +852,7 @@ class VideoProcessor:
             
             for i, frame_idx in enumerate(frame_indices):
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                ret, frame = cap.read()
+                    ret, frame = cap.read()
                 if ret:
                     # Skip if too similar to previous frame
                     if prev_frame is not None:
@@ -857,7 +861,7 @@ class VideoProcessor:
                             logger.info(f"Skipping frame {i} (too similar to previous)")
                             continue
                     
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     frames_with_indices.append((frame_rgb, len(self.frames)))
                     self.frames.append(frame_rgb)
                     prev_frame = frame
@@ -886,7 +890,7 @@ class VideoProcessor:
                     caption = future.result()
                     self.frame_captions[idx] = caption
                     logger.info(f"Caption generated for frame {idx}")
-                except Exception as e:
+                        except Exception as e:
                     logger.error(f"Error processing frame {idx}: {str(e)}")
                     self.frame_captions[idx] = f"Error: {str(e)}"
             
@@ -935,7 +939,7 @@ def upload_video():
             response = processor.process_video(video_path, "Briefly describe what this video shows.")
             if response.startswith("Error:"):
                 return jsonify({'error': response}), 500
-                
+            
             return jsonify({
                 'message': 'Video processed successfully',
                 'initial_description': response
@@ -995,7 +999,7 @@ def chat():
         logger.info("Successfully generated chat response")
         return jsonify({'response': response})
         
-    except Exception as e:
+                    except Exception as e:
         logger.error(f"Error in chat endpoint: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
@@ -1097,4 +1101,4 @@ def test_caption():
         }), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5000) 

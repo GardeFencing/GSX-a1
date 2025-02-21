@@ -1,18 +1,13 @@
 import os
 import logging
 from typing import Optional
-from PIL import Image
 
 # Local imports
-from src.app.model import load_model_and_tokenizer, generate_response
-from src.utils.video_processing import encode_video
+from src.app.model import model
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Load model and tokenizer globally
-model, tokenizer = load_model_and_tokenizer()
 
 def describe_video(video_path: str, question: str) -> str:
     """
@@ -32,13 +27,8 @@ def describe_video(video_path: str, question: str) -> str:
         if not question:
             return "Error: No question provided"
             
-        # Extract frames from video
-        frames = encode_video(video_path)
-        if not frames:
-            return "Error: Could not extract frames from video"
-            
-        # Generate response
-        response = generate_response(model, tokenizer, frames, question)
+        # Generate response using CLI
+        response = model.generate_response(video_path, question)
         if response is None:
             return "Error: Could not generate response"
             
