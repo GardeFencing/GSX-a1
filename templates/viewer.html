@@ -111,18 +111,21 @@
     </div>
 
     <script>
-        let currentFrame = 0;
-        let totalFrames = {{ total_frames }};
-        let isPlaying = false;
-        let playInterval;
-        let frameData = {};  // Store frame data for context
+        // Initialize variables
+        const state = {
+            currentFrame: 0,
+            totalFrames: Number({{ total_frames }}),
+            isPlaying: false,
+            playInterval: null,
+            frameData: {}
+        };
         
         // Initialize slider
         const slider = document.getElementById('frame-slider');
-        slider.max = totalFrames - 1;
+        slider.max = state.totalFrames - 1;
         
         // Update total frames display
-        document.getElementById('total-frames').textContent = totalFrames;
+        document.getElementById('total-frames').textContent = state.totalFrames;
         
         async function loadFrame(index) {
             try {
@@ -134,10 +137,10 @@
                     document.getElementById('frame-caption').textContent = data.caption;
                     document.getElementById('current-frame').textContent = index + 1;
                     slider.value = index;
-                    currentFrame = index;
+                    state.currentFrame = index;
                     
                     // Store frame data for context
-                    frameData[index] = {
+                    state.frameData[index] = {
                         caption: data.caption,
                         frame_number: data.frame_number,
                         total_frames: data.total_frames
@@ -170,12 +173,12 @@
                 // Get context from current and surrounding frames
                 const contextFrames = [];
                 const range = 2; // Get 2 frames before and after current frame
-                for (let i = Math.max(0, currentFrame - range); 
-                     i <= Math.min(totalFrames - 1, currentFrame + range); i++) {
-                    if (frameData[i]) {
+                for (let i = Math.max(0, state.currentFrame - range); 
+                     i <= Math.min(state.totalFrames - 1, state.currentFrame + range); i++) {
+                    if (state.frameData[i]) {
                         contextFrames.push({
                             frame_number: i + 1,
-                            caption: frameData[i].caption
+                            caption: state.frameData[i].caption
                         });
                     }
                 }
@@ -183,73 +186,68 @@
                 const response = await fetch('/chat', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
                     },
                     body: JSON.stringify({
                         query: query,
-                        current_frame: currentFrame,
+                        current_frame: state.currentFrame,
                         context_frames: contextFrames
                     })
                 });
                 
+                // Check if response is JSON
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    throw new Error('Server returned non-JSON response');
+                }
+                
                 const data = await response.json();
                 
                 if (response.ok) {
-                    addMessage(data.response);
+                    if (data.response) {
+                        addMessage(data.response);
+                    } else {
+                        throw new Error('No response in data');
+                    }
                 } else {
-                    throw new Error(data.error || 'Error processing request');
+                    throw new Error(data.error || 'Server returned an error');
                 }
             } catch (error) {
-                addMessage('Error: ' + error.message);
+                console.error('Chat error:', error);
+                addMessage('Error: ' + (error.message || 'Failed to process request'));
             }
         }
         
-        // Load initial frame
-        loadFrame(0);
+        // Event handlers
+        function handlePrevFrame() {
+            if (state.currentFrame > 0) loadFrame(state.currentFrame - 1);
+        }
         
-        // Event listeners
-        document.getElementById('prev-frame').addEventListener('click', () => {
-            if (currentFrame > 0) loadFrame(currentFrame - 1);
-        });
+        function handleNextFrame() {
+            if (state.currentFrame < state.totalFrames - 1) loadFrame(state.currentFrame + 1);
+        }
         
-        document.getElementById('next-frame').addEventListener('click', () => {
-            if (currentFrame < totalFrames - 1) loadFrame(currentFrame + 1);
-        });
-        
-        slider.addEventListener('input', (e) => {
-            loadFrame(parseInt(e.target.value));
-        });
-        
-        document.getElementById('send-message').addEventListener('click', sendMessage);
-        
-        document.getElementById('chat-input').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                sendMessage();
-            }
-        });
-        
-        // Play/Pause functionality
-        document.getElementById('play-pause').addEventListener('click', function() {
-            isPlaying = !isPlaying;
-            this.textContent = isPlaying ? 'Pause' : 'Play';
+        function handlePlayPause() {
+            state.isPlaying = !state.isPlaying;
+            this.textContent = state.isPlaying ? 'Pause' : 'Play';
             
-            if (isPlaying) {
-                playInterval = setInterval(() => {
-                    if (currentFrame >= totalFrames - 1) {
-                        isPlaying = false;
+            if (state.isPlaying) {
+                state.playInterval = setInterval(() => {
+                    if (state.currentFrame >= state.totalFrames - 1) {
+                        state.isPlaying = false;
                         this.textContent = 'Play';
-                        clearInterval(playInterval);
+                        clearInterval(state.playInterval);
                         return;
                     }
-                    loadFrame(currentFrame + 1);
-                }, 200); // Adjust speed as needed
+                    loadFrame(state.currentFrame + 1);
+                }, 200);
             } else {
-                clearInterval(playInterval);
+                clearInterval(state.playInterval);
             }
-        });
+        }
         
-        // Keyboard controls
-        document.addEventListener('keydown', (e) => {
+        function handleKeyboardControls(e) {
             // Don't handle keyboard events if chat input is focused
             if (document.activeElement.id === 'chat-input') {
                 return;
@@ -257,17 +255,31 @@
             
             switch(e.key) {
                 case 'ArrowLeft':
-                    if (currentFrame > 0) loadFrame(currentFrame - 1);
+                    handlePrevFrame();
                     break;
                 case 'ArrowRight':
-                    if (currentFrame < totalFrames - 1) loadFrame(currentFrame + 1);
+                    handleNextFrame();
                     break;
                 case ' ':
                     document.getElementById('play-pause').click();
                     e.preventDefault();
                     break;
             }
+        }
+        
+        // Initialize event listeners
+        document.getElementById('prev-frame').addEventListener('click', handlePrevFrame);
+        document.getElementById('next-frame').addEventListener('click', handleNextFrame);
+        document.getElementById('play-pause').addEventListener('click', handlePlayPause);
+        document.getElementById('send-message').addEventListener('click', sendMessage);
+        document.getElementById('chat-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
         });
+        document.addEventListener('keydown', handleKeyboardControls);
+        slider.addEventListener('input', (e) => loadFrame(parseInt(e.target.value)));
+        
+        // Load initial frame
+        loadFrame(0);
     </script>
 </body>
 </html> 

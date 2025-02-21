@@ -483,6 +483,12 @@ class VideoProcessor:
         self.temp_dir = os.path.join(self.base_dir, 'temp_frames')
         if not os.path.exists(self.temp_dir):
             os.makedirs(self.temp_dir, exist_ok=True)
+            
+        # Initialize thread pool for parallel processing
+        self.executor = ThreadPoolExecutor(max_workers=4)
+        
+        # Constants for frame processing
+        self.MAX_FRAMES = 32  # Reduced from 64 to balance speed and memory
         
         print(f"Model path: {self.model_path}")
         print(f"MMPROJ path: {self.mmproj_path}")
@@ -491,27 +497,88 @@ class VideoProcessor:
         
         self._initialized = True
     
+    def uniform_sample(self, frame_indices: List[int], n: int) -> List[int]:
+        """Uniformly sample n frames from the list of indices"""
+        gap = len(frame_indices) / n
+        return [int(i * gap + gap / 2) for i in range(n)]
+    
+    def process_single_frame(self, frame: np.ndarray, frame_idx: int, fps: float) -> str:
+        """Process a single frame and return its caption"""
+        temp_path = os.path.join(self.temp_dir, f"frame_{frame_idx}.jpg")
+        try:
+            # Save frame as temporary file
+            success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+                                [cv2.IMWRITE_JPEG_QUALITY, 95])
+            if not success:
+                return "Failed to save frame"
+            
+            # Construct command with GPU acceleration
+            cmd = [
+                self.cli_path,
+                "-m", self.model_path,
+                "--mmproj", self.mmproj_path,
+                "-t", str(max(1, os.cpu_count() // 2)),  # Optimize thread count
+                "-n", "256",
+                "--temp", "0.1",
+                "--ctx-size", "2048",
+                "--top-p", "0.7",
+                "--top-k", "40",
+                "--gpu-layers", "35",  # Enable GPU acceleration
+                "-ngl", "35",  # Number of GPU layers
+                "--image", temp_path,
+                "-p", "Describe what is happening in this frame."
+            ]
+            
+            logger.info(f"Processing frame {frame_idx} at time {frame_idx/fps:.2f}s")
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=180,
+                check=False
+            )
+            
+            if result.returncode != 0:
+                return f"Error: Command failed with code {result.returncode}"
+            
+            # Process output
+            lines = result.stdout.split('\n')
+            response_lines = []
+            capture_response = False
+            
+            for line in lines:
+                line = line.strip()
+                if '<assistant>' in line.lower():
+                    capture_response = True
+                    continue
+                if capture_response and ('<user>' in line.lower() or 'llama_print' in line.lower()):
+                    break
+                if capture_response and line:
+                    response_lines.append(line)
+            
+            return ' '.join(response_lines).strip() or "No caption generated"
+            
+        except Exception as e:
+            return f"Error: {str(e)}"
+        finally:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+    
     def process_video(self, video_path: str) -> None:
-        """Process video file and extract frames using MiniCPM-V's approach"""
+        """Process video file with optimized frame extraction and GPU acceleration"""
         try:
             print("\n" + "="*50)
-            print("Starting video processing...")
+            print("Starting optimized video processing...")
             print("="*50)
             
             # Reset state
             self.frames = []
             self.frame_captions = []
             self.processing_complete = False
-            
-            # Verify paths
-            print(f"Video path: {video_path}")
-            print(f"Model path: {self.model_path}")
-            print(f"MMPROJ path: {self.mmproj_path}")
-            print(f"CLI path: {self.cli_path}")
-            
-            for path in [self.model_path, self.mmproj_path, self.cli_path]:
-                if not os.path.exists(path):
-                    raise ValueError(f"Required file not found: {path}")
             
             # Open video file
             cap = cv2.VideoCapture(video_path)
@@ -521,162 +588,64 @@ class VideoProcessor:
             # Get video properties
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             fps = int(cap.get(cv2.CAP_PROP_FPS))
-            print(f"\nVideo properties:")
-            print(f"- Total frames: {total_frames}")
-            print(f"- FPS: {fps}")
             
             # Calculate frame sampling interval (1 frame per second)
             sample_interval = max(1, fps)
             frame_indices = list(range(0, total_frames, sample_interval))
             
             # Uniformly sample frames if too many
-            MAX_FRAMES = 15  # Limit to 15 frames
-            if len(frame_indices) > MAX_FRAMES:
-                gap = len(frame_indices) / MAX_FRAMES
-                frame_indices = [int(i * gap + gap / 2) for i in range(MAX_FRAMES)]
+            if len(frame_indices) > self.MAX_FRAMES:
+                frame_indices = self.uniform_sample(frame_indices, self.MAX_FRAMES)
             
-            print(f"\nFrame extraction plan:")
-            print(f"- Frame interval: {sample_interval}")
+            print(f"\nOptimized frame extraction plan:")
+            print(f"- Total frames in video: {total_frames}")
+            print(f"- FPS: {fps}")
             print(f"- Selected frames: {len(frame_indices)}")
             
             # Extract frames
-            print("\nExtracting frames...")
+            frames_with_indices = []
             for frame_idx in frame_indices:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
                 ret, frame = cap.read()
-                if not ret:
-                    break
-                
-                # Convert BGR to RGB
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                self.frames.append(frame_rgb)
-                print(f"Extracted frame {len(self.frames)} at time {frame_idx/fps:.2f}s")
+                if ret:
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    frames_with_indices.append((frame_rgb, frame_idx))
+                    self.frames.append(frame_rgb)
             
             cap.release()
-            print(f"\nExtracted {len(self.frames)} frames")
             
-            # Process frames one by one
-            print("\nProcessing frames with MiniCPM-V...")
-            for i, frame in enumerate(self.frames):
-                print(f"\nProcessing frame {i+1}/{len(self.frames)}")
-                temp_path = os.path.join(self.temp_dir, f"frame_{i+1}.jpg")
-                
-                try:
-                    # Save frame as temporary file with high quality
-                    success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
-                                        [cv2.IMWRITE_JPEG_QUALITY, 100])
-                    if not success or not os.path.exists(temp_path):
-                        print(f"Warning: Failed to save frame {i+1}")
-                        self.frame_captions.append("Failed to save frame")
-                        continue
-                    
-                    # Verify file exists and has content
-                    if not os.path.getsize(temp_path) > 0:
-                        print(f"Warning: Empty frame file for frame {i+1}")
-                        self.frame_captions.append("Empty frame file")
-                        continue
-                    
-                    # Construct command with absolute paths
-                    cmd = [
-                        os.path.abspath(self.cli_path),
-                        "-m", os.path.abspath(self.model_path),
-                        "--mmproj", os.path.abspath(self.mmproj_path),
-                        "-t", "4",
-                        "-n", "512",
-                        "--temp", "0.1",
-                        "--ctx-size", "2048",
-                        "--repeat-penalty", "1.1",
-                        "--top-p", "0.7",
-                        "--top-k", "40",
-                        "-ngl", "0",  # Disable GPU layers
-                        "--image", os.path.abspath(temp_path),
-                        "-p", "Describe what is happening in this frame."
-                    ]
-                    
-                    print("Running command:", " ".join(cmd))
-                    
-                    # Run command with increased timeout
-                    logger.info(f"Running command for frame {i+1}")
-                    result = subprocess.run(
-                        cmd,
-                        capture_output=True,
-                        text=True,
-                        timeout=180,  # 2 minutes timeout
-                        check=False,  # Don't raise exception on non-zero exit
-                        cwd=self.base_dir  # Run from base directory
-                    )
-                    
-                    # Always log command output
-                    if result.stdout:
-                        logger.info(f"Command stdout for frame {i+1}:\n{result.stdout}")
-                    if result.stderr:
-                        logger.error(f"Command stderr for frame {i+1}:\n{result.stderr}")
-                    
-                    if result.returncode != 0:
-                        error_msg = f"Command failed with code {result.returncode}"
-                        logger.error(f"{error_msg} for frame {i+1}")
-                        self.frame_captions.append(f"Error: {error_msg}")
-                        continue
-                    
-                    # Process output only if command succeeded
-                    response = None
-                    try:
-                        # Split output into lines and process
-                        lines = result.stdout.split('\n')
-                        response_lines = []
-                        capture_response = False
-                        
-                        for line in lines:
-                            line = line.strip()
-                            # Start capturing after seeing assistant's response
-                            if '<assistant>' in line.lower():
-                                capture_response = True
-                                continue
-                            # Stop capturing at the next prompt or system message
-                            if capture_response and ('<user>' in line.lower() or 'llama_print' in line.lower()):
-                                break
-                            if capture_response and line:
-                                response_lines.append(line)
-                        
-                        response = ' '.join(response_lines).strip()
-                    except Exception as e:
-                        logger.error(f"Error processing output for frame {i+1}: {str(e)}")
-                    
-                    if response:
-                        logger.info(f"Generated caption for frame {i+1}: {response}")
-                        self.frame_captions.append(response)
-                    else:
-                        error_msg = "No valid response generated from model output"
-                        logger.warning(f"{error_msg} for frame {i+1}")
-                        self.frame_captions.append(error_msg)
-                    
-                except subprocess.TimeoutExpired:
-                    print(f"Error: Command timed out for frame {i+1}")
-                    self.frame_captions.append("Timeout error")
-                except subprocess.CalledProcessError as e:
-                    print(f"Error: Command failed for frame {i+1}: {e.stderr}")
-                    self.frame_captions.append("Processing error")
-                except Exception as e:
-                    print(f"Unexpected error for frame {i+1}: {str(e)}")
-                    self.frame_captions.append("Processing error")
-                finally:
-                    # Keep temp files for debugging
-                    print(f"Frame {i+1} saved at: {temp_path}")
-            
-            if len(self.frames) == 0:
+            if not frames_with_indices:
                 raise ValueError("No frames were extracted")
             
+            # Process frames in parallel
+            print("\nProcessing frames with GPU acceleration...")
+            future_to_frame = {
+                self.executor.submit(self.process_single_frame, frame, idx, fps): idx 
+                for frame, idx in frames_with_indices
+            }
+            
+            # Collect results in order
+            captions = [None] * len(frames_with_indices)
+            for future in concurrent.futures.as_completed(future_to_frame):
+                idx = future_to_frame[future]
+                try:
+                    caption = future.result()
+                    captions[frames_with_indices.index((self.frames[idx], idx))] = caption
+                    print(f"Processed frame {idx+1}/{len(frames_with_indices)}")
+                except Exception as e:
+                    print(f"Error processing frame {idx}: {str(e)}")
+                    captions[frames_with_indices.index((self.frames[idx], idx))] = f"Error: {str(e)}"
+            
+            self.frame_captions = captions
             self.processing_complete = True
+            
             print("\n" + "="*50)
-            print("Video processing completed!")
-            print(f"Total frames: {len(self.frames)}")
-            print(f"Total captions: {len(self.frame_captions)}")
+            print("Video processing completed with GPU acceleration!")
+            print(f"Total frames processed: {len(self.frames)}")
             print("="*50)
             
         except Exception as e:
-            print("\n" + "="*50)
-            print(f"Error in process_video: {str(e)}")
-            print("="*50)
+            print(f"\nError in process_video: {str(e)}")
             self.processing_complete = False
             raise
 
@@ -755,9 +724,13 @@ def chat():
             return jsonify({'error': 'Video is still processing'}), 400
             
         # Validate request data
+        if not request.is_json:
+            logger.error("Request is not JSON")
+            return jsonify({'error': 'Request must be JSON'}), 400
+            
         data = request.get_json()
         if not data or 'query' not in data:
-            logger.error("Invalid request data")
+            logger.error("No query in request data")
             return jsonify({'error': 'No query provided'}), 400
             
         query = data['query']
@@ -766,7 +739,7 @@ def chat():
         
         # Validate frame index
         if current_frame >= len(video_processor.frames):
-            logger.error(f"Invalid frame index {current_frame}")
+            logger.error(f"Invalid frame index: {current_frame}")
             return jsonify({'error': 'Invalid frame index'}), 400
             
         # Get current frame
@@ -783,57 +756,45 @@ def chat():
             
             logger.info(f"Frame saved to {temp_path}")
             
-            # Construct command
+            # Construct command with GPU acceleration
             cmd = [
                 video_processor.cli_path,
                 "-m", video_processor.model_path,
                 "--mmproj", video_processor.mmproj_path,
-                "-t", "4",
-                "-n", "512",
+                "-t", str(max(1, os.cpu_count() // 2)),
+                "-n", "256",
                 "--temp", "0.1",
                 "--ctx-size", "2048",
-                "--repeat-penalty", "1.1",
                 "--top-p", "0.7",
                 "--top-k", "40",
+                "--gpu-layers", "35",
+                "-ngl", "35",
                 "--image", temp_path,
                 "-p", query
             ]
             
             logger.info(f"Running command: {' '.join(cmd)}")
             
-            # Execute command
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=180,  # Increased from 60 to 180 seconds (3 minutes) per frame
-                check=False  # Don't raise on non-zero exit
-            )
-            
-            # Log command output
-            if result.stdout:
-                logger.info(f"Command stdout:\n{result.stdout}")
-            if result.stderr:
-                logger.error(f"Command stderr:\n{result.stderr}")
-            
-            if result.returncode != 0:
-                logger.error(f"Command failed with code {result.returncode}")
-                return jsonify({'error': f'Command failed with code {result.returncode}'}), 500
-            
-            # Process model output
+            # Execute command with timeout
             try:
-                # Split output into lines and process
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                    check=True  # This will raise CalledProcessError if return code is non-zero
+                )
+                
+                # Process model output
                 lines = result.stdout.split('\n')
                 response_lines = []
                 capture_response = False
                 
                 for line in lines:
                     line = line.strip()
-                    # Start capturing after seeing assistant's response
                     if '<assistant>' in line.lower():
                         capture_response = True
                         continue
-                    # Stop capturing at the next prompt or system message
                     if capture_response and ('<user>' in line.lower() or 'llama_print' in line.lower()):
                         break
                     if capture_response and line:
@@ -842,34 +803,34 @@ def chat():
                 response = ' '.join(response_lines).strip()
                 
                 if not response:
-                    logger.warning("No response generated from model output")
+                    logger.error("No response generated from model")
                     return jsonify({'error': 'No response generated'}), 500
                 
                 logger.info(f"Generated response: {response}")
                 return jsonify({'response': response})
-                        
-            except Exception as e:
-                logger.error(f"Error processing model output: {str(e)}", exc_info=True)
-                return jsonify({'error': 'Failed to process model output'}), 500
                 
-        except subprocess.TimeoutExpired as e:
-            logger.error("Command timed out", exc_info=True)
-            return jsonify({'error': 'Request timed out'}), 504
-        except Exception as e:
-            logger.error(f"Unexpected error in chat: {str(e)}", exc_info=True)
-            return jsonify({'error': 'Internal server error'}), 500
+            except subprocess.TimeoutExpired as e:
+                logger.error(f"Command timed out: {str(e)}")
+                return jsonify({'error': 'Request timed out'}), 504
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Command failed with code {e.returncode}: {e.stderr}")
+                return jsonify({'error': f'Command failed: {e.stderr}'}), 500
+            except Exception as e:
+                logger.error(f"Error running command: {str(e)}")
+                return jsonify({'error': str(e)}), 500
+                
         finally:
             # Clean up temp file
-            try:
-                if os.path.exists(temp_path):
+            if os.path.exists(temp_path):
+                try:
                     os.remove(temp_path)
                     logger.info(f"Cleaned up temp file: {temp_path}")
-            except Exception as e:
-                logger.error(f"Failed to clean up temp file: {str(e)}")
+                except Exception as e:
+                    logger.error(f"Failed to clean up temp file: {str(e)}")
             
     except Exception as e:
         logger.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
-        return jsonify({'error': 'Internal server error'}), 500
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/get_frame/<int:frame_idx>')
 def get_frame(frame_idx):
