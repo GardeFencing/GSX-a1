@@ -66,6 +66,29 @@
         .chat-section {
             margin-top: 20px;
         }
+        .coach-report {
+            margin: 20px 0;
+            padding: 20px;
+            background-color: #f8f9fa;
+            border-radius: 10px;
+            border: 1px solid #dee2e6;
+            white-space: pre-wrap;
+            display: none;
+        }
+        .coach-report h4 {
+            color: #2c3e50;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 10px;
+        }
+        .coach-report pre {
+            font-family: inherit;
+            background: none;
+            padding: 0;
+            margin: 0;
+            white-space: pre-wrap;
+            font-size: 1rem;
+        }
         .suggested-questions {
             margin: 20px 0;
             padding: 15px;
@@ -93,6 +116,11 @@
             <div class="progress">
                 <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar"></div>
             </div>
+        </div>
+
+        <div class="coach-report" id="coachReport">
+            <h4>Coach's Technical Analysis Report</h4>
+            <pre id="reportText"></pre>
         </div>
 
         <div class="chat-section" style="display: none;">
@@ -133,7 +161,7 @@
                 document.querySelector('.loading').style.display = 'block';
                 document.querySelector('.progress').style.display = 'flex';
 
-                // Upload video
+                // Upload video and get initial report
                 const formData = new FormData();
                 formData.append('video', file);
 
@@ -146,8 +174,15 @@
                     if (data.error) {
                         throw new Error(data.error);
                     }
+                    // Display coach's report
+                    document.getElementById('coachReport').style.display = 'block';
+                    document.getElementById('reportText').textContent = data.report;
+                    
                     // Show chat section
                     document.querySelector('.chat-section').style.display = 'block';
+                    
+                    // Add initial report to chat
+                    addMessage("Here's my initial analysis of your fencing technique. Feel free to ask specific questions about any aspect of your performance.", false);
                 })
                 .catch(error => {
                     alert('Error: ' + error.message);

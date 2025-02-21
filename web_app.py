@@ -121,9 +121,42 @@ def upload_video():
         file_size = os.path.getsize(video_path)
         logger.info(f"Video file size: {file_size} bytes")
         
+        # Generate initial coach's report
+        logger.info("Generating initial coach's report...")
+        initial_report = video_analyzer.analyze_video(
+            video_path,
+            """As an expert fencing coach, provide a detailed technical analysis report of this video. Structure your response as follows:
+
+            COACH'S INITIAL ASSESSMENT
+            -------------------------
+            1. TECHNIQUE OVERVIEW
+            - Identify the specific fencing actions/techniques shown
+            - Evaluate the overall execution quality
+
+            2. TECHNICAL BREAKDOWN
+            - Body Position and Alignment
+            - Footwork Analysis
+            - Blade Control and Hand Position
+            - Distance Management
+            - Timing and Rhythm
+
+            3. KEY OBSERVATIONS
+            - Notable Strengths
+            - Areas Needing Attention
+            - Critical Technical Points
+
+            4. RECOMMENDATIONS
+            - Specific Drills for Improvement
+            - Focus Points for Next Practice
+            - Training Priorities
+
+            Please be specific and technical in your analysis, focusing on competitive fencing aspects."""
+        )
+        logger.info("Initial report generated successfully")
+        
         return jsonify({
             'success': True,
-            'message': 'Video uploaded successfully'
+            'report': initial_report
         })
         
     except Exception as e:
