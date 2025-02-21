@@ -59,16 +59,15 @@ class VideoAnalyzer:
             # Enhanced prompt with fencing context
             enhanced_prompt = self._enhance_prompt(query)
             
-            # Optimized parameters based on MiniCPM recommendations
+            # Parameters based on example usage
             cmd = [
                 "./llama-minicpmv-cli",
                 "-m", self.model_path,
                 "--mmproj", self.mmproj_path,
-                "-c", "2048",  # Reduced for faster processing
-                "--max-slice-nums", "9",  # MiniCPM recommended
-                "--temp", "0.7",
+                "-c", "2048",
+                "--temp", "0.1",  # Lower temperature as recommended for better quality
                 "--top-p", "0.8",
-                "--top-k", "20",  # Reduced for faster generation
+                "--top-k", "20",
                 "--repeat-penalty", "1.05",
                 "--video", abs_video_path,
                 "-p", enhanced_prompt
