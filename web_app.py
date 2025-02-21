@@ -121,17 +121,9 @@ def upload_video():
         file_size = os.path.getsize(video_path)
         logger.info(f"Video file size: {file_size} bytes")
         
-        # Perform initial analysis
-        logger.info("Starting initial video analysis...")
-        initial_analysis = video_analyzer.analyze_video(
-            video_path,
-            "Please describe what is happening in this video in detail."
-        )
-        logger.info("Initial analysis completed successfully")
-        
         return jsonify({
             'success': True,
-            'analysis': initial_analysis
+            'message': 'Video uploaded successfully'
         })
         
     except Exception as e:
@@ -151,9 +143,20 @@ def chat():
         logger.info(f"Processing chat query for video: {video_analyzer.current_video}")
         logger.info(f"Query: {data['query']}")
         
+        # Enhance the query with coaching context
+        coaching_query = f"""As an expert fencing coach analyzing this video, {data['query']}
+
+        Consider:
+        - Technical execution
+        - Body mechanics
+        - Timing and distance
+        - Strategic implications
+        
+        Provide specific, actionable feedback in your response."""
+        
         response = video_analyzer.analyze_video(
             video_analyzer.current_video,
-            data['query']
+            coaching_query
         )
         
         logger.info("Chat response generated successfully")
