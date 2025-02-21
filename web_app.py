@@ -91,11 +91,11 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload_video():
-        if 'video' not in request.files:
+    if 'video' not in request.files:
         return jsonify({'error': 'No video file provided'}), 400
-            
-        video_file = request.files['video']
-        if video_file.filename == '':
+    
+    video_file = request.files['video']
+    if video_file.filename == '':
         return jsonify({'error': 'No video file selected'}), 400
     
     try:
@@ -135,12 +135,12 @@ def upload_video():
             Format this as a structured coaching report."""
         )
         logger.info("Initial analysis completed successfully")
-            
-            return jsonify({
+        
+        return jsonify({
             'success': True,
             'analysis': initial_analysis
-            })
-            
+        })
+        
     except Exception as e:
         logger.error(f"Error processing video: {e}")
         return jsonify({'error': str(e)}), 500
