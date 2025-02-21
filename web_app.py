@@ -518,7 +518,21 @@ class VideoProcessor:
     
     def process_single_frame(self, frame: np.ndarray, frame_idx: int, fps: float) -> str:
         """Process a single frame and return its caption"""
-        temp_path = os.path.join(self.temp_dir, f"frame_{frame_idx}.jpg")
+        # Clean up old files first
+        try:
+            for f in os.listdir(self.temp_dir):
+                if f.startswith('temp_frame_') or f.startswith('frame_') or f.startswith('chat_frame_'):
+                    try:
+                        os.remove(os.path.join(self.temp_dir, f))
+                    except:
+                        pass
+        except:
+            pass
+
+        # Use timestamp to ensure unique filename
+        timestamp = int(time.time() * 1000)
+        temp_path = os.path.join(self.temp_dir, f"temp_frame_{timestamp}_{frame_idx}.jpg")
+        
         try:
             # Save frame as temporary file with high quality
             success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
@@ -526,6 +540,18 @@ class VideoProcessor:
             if not success:
                 logger.error(f"Failed to save frame {frame_idx} to {temp_path}")
                 return "Failed to save frame"
+            
+            # Verify file was actually written
+            if not os.path.exists(temp_path):
+                logger.error(f"File {temp_path} was not created")
+                return "Failed to create frame file"
+                
+            file_size = os.path.getsize(temp_path)
+            if file_size == 0:
+                logger.error(f"File {temp_path} is empty")
+                return "Frame file is empty"
+            
+            logger.info(f"Successfully saved frame {frame_idx} to {temp_path} (size: {file_size} bytes)")
             
             # Log paths for debugging
             logger.info(f"Processing frame {frame_idx} with paths:")
@@ -548,61 +574,89 @@ class VideoProcessor:
             # Construct command with GPU acceleration
             cmd = [
                 self.cli_path,
-                "-m", self.model_path,
-                "--mmproj", self.mmproj_path,
+                "-m", os.path.abspath(self.model_path),
+                "--mmproj", os.path.abspath(self.mmproj_path),
                 "-t", str(max(1, os.cpu_count() // 2)),
                 "-n", "256",
                 "--temp", "0.1",
                 "--ctx-size", "2048",
                 "--top-p", "0.7",
                 "--top-k", "40",
-                "--image", temp_path,
+                "--image", os.path.abspath(temp_path),
                 "-p", "Describe what is happening in this frame."
             ]
             
             logger.info(f"Running command for frame {frame_idx}: {' '.join(cmd)}")
             
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=180,
-                check=True
-            )
+            # Run command with retries
+            max_retries = 3
+            retry_count = 0
+            while retry_count < max_retries:
+                try:
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=180,
+                        check=True
+                    )
+                    
+                    if result.returncode != 0:
+                        logger.error(f"Command failed for frame {frame_idx} with code {result.returncode}")
+                        logger.error(f"Error output: {result.stderr}")
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            time.sleep(1)
+                            continue
+                        return f"Error: Command failed with code {result.returncode}"
+                    
+                    # Process output to extract caption
+                    lines = result.stdout.split('\n')
+                    caption_lines = []
+                    for line in lines:
+                        if line and not line.startswith('>') and not line.startswith('llama_print'):
+                            caption_lines.append(line.strip())
+                    
+                    caption = " ".join(caption_lines)
+                    if not caption:
+                        logger.error(f"No caption generated for frame {frame_idx}")
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            time.sleep(1)
+                            continue
+                        return "Error: No caption generated"
+                    
+                    logger.info(f"Successfully generated caption for frame {frame_idx}")
+                    return caption
+                    
+                except subprocess.TimeoutExpired:
+                    logger.error(f"Timeout processing frame {frame_idx} (attempt {retry_count + 1})")
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        time.sleep(1)
+                        continue
+                    return "Error: Frame processing timed out"
+                except Exception as e:
+                    logger.error(f"Error processing frame {frame_idx}: {str(e)}")
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        time.sleep(1)
+                        continue
+                    return f"Error: {str(e)}"
+                
+            return "Error: All retries failed"
             
-            if result.returncode != 0:
-                logger.error(f"Command failed for frame {frame_idx} with code {result.returncode}")
-                logger.error(f"Error output: {result.stderr}")
-                return f"Error: Command failed with code {result.returncode}"
-            
-            # Process output to extract caption
-            lines = result.stdout.split('\n')
-            caption_lines = []
-            for line in lines:
-                if line and not line.startswith('>') and not line.startswith('llama_print'):
-                    caption_lines.append(line.strip())
-            
-            caption = " ".join(caption_lines)
-            if not caption:
-                logger.error(f"No caption generated for frame {frame_idx}")
-                return "Error: No caption generated"
-            
-            logger.info(f"Successfully generated caption for frame {frame_idx}")
-            return caption
-            
-        except subprocess.TimeoutExpired:
-            logger.error(f"Timeout processing frame {frame_idx}")
-            return "Error: Frame processing timed out"
         except Exception as e:
             logger.error(f"Error processing frame {frame_idx}: {str(e)}")
             return f"Error: {str(e)}"
         finally:
             # Cleanup temporary file
-            if os.path.exists(temp_path):
-                try:
+            try:
+                if os.path.exists(temp_path):
                     os.remove(temp_path)
-                except Exception as e:
-                    logger.error(f"Failed to clean up temp file {temp_path}: {str(e)}")
+                    logger.info(f"Cleaned up temp file {temp_path}")
+            except Exception as e:
+                logger.error(f"Failed to clean up temp file {temp_path}: {str(e)}")
     
     def process_video(self, video_path: str) -> None:
         """Process video file with optimized frame extraction and GPU acceleration"""
