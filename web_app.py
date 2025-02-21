@@ -121,11 +121,14 @@ def upload_video():
         file_size = os.path.getsize(video_path)
         logger.info(f"Video file size: {file_size} bytes")
         
-        # Perform initial analysis
+        # Perform initial analysis with coaching prompt
         logger.info("Starting initial video analysis...")
         initial_analysis = video_analyzer.analyze_video(
             video_path,
-            "Describe the fencing techniques and movements shown in this video, focusing on form and execution."
+            """You are an expert fencing coach, describe what the fencer(s) is doing in simple, clear terms. Focus on the actual movements first, then key observations about their form.
+            Keep it conversational, like you're watching them in person.
+            Example: "You're working on a lunge sequence. I can see you preparing with good back leg positioning, though you might want to adjust your sword arm a bit."
+            Format this as a structured coaching report."""
         )
         logger.info("Initial analysis completed successfully")
         
@@ -152,7 +155,7 @@ def chat():
         logger.info(f"Query: {data['query']}")
         
         # Keep the query simple but focused on fencing
-        query = f"Regarding the fencing techniques in this video: {data['query']}"
+        query = f"As a fencing coach, analyze this aspect: {data['query']}"
         
         response = video_analyzer.analyze_video(
             video_analyzer.current_video,
