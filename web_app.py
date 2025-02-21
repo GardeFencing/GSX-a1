@@ -558,7 +558,7 @@ class VideoProcessor:
                     response_lines.append(line)
             
             return ' '.join(response_lines).strip() or "No caption generated"
-            
+                
         except Exception as e:
             return f"Error: {str(e)}"
         finally:
@@ -620,28 +620,30 @@ class VideoProcessor:
             # Process frames in parallel
             print("\nProcessing frames with GPU acceleration...")
             future_to_frame = {
-                self.executor.submit(self.process_single_frame, frame, frame_idx, fps): (frame_idx, frame_idx) 
-                for frame_idx, frame in enumerate(self.frames)
+                self.executor.submit(self.process_single_frame, frame, idx, fps): idx 
+                for idx, frame in enumerate(self.frames)
             }
             
             # Collect results in order
             captions = [None] * len(self.frames)
             for future in as_completed(future_to_frame):
-                frame_idx, orig_idx = future_to_frame[future]
                 try:
+                    idx = future_to_frame[future]
                     caption = future.result()
-                    captions[frame_idx] = caption
-                    print(f"Processed frame {frame_idx+1}/{len(self.frames)}")
+                    captions[idx] = caption
+                    print(f"Processed frame {idx+1}/{len(self.frames)}")
                 except Exception as e:
-                    print(f"Error processing frame {frame_idx}: {str(e)}")
-                    captions[frame_idx] = f"Error: {str(e)}"
+                    print(f"Error processing frame {idx}: {str(e)}")
+                    captions[idx] = f"Error: {str(e)}"
             
+            # Store captions and mark processing as complete
             self.frame_captions = captions
             self.processing_complete = True
             
             print("\n" + "="*50)
             print("Video processing completed with GPU acceleration!")
             print(f"Total frames processed: {len(self.frames)}")
+            print(f"Total captions generated: {len(self.frame_captions)}")
             print("="*50)
             
         except Exception as e:
@@ -662,42 +664,37 @@ def index():
 def upload_video():
     global video_processor
     try:
-        logger.info("Upload request received")
         if 'video' not in request.files:
-            logger.error("No video file in request")
             return jsonify({'error': 'No video file uploaded'}), 400
-        
+            
         video_file = request.files['video']
         if video_file.filename == '':
-            logger.error("Empty filename")
             return jsonify({'error': 'No selected file'}), 400
-        
+            
         # Save the uploaded file
         video_path = os.path.join(app.config['UPLOAD_FOLDER'], video_file.filename)
-        logger.info(f"Saving video to {video_path}")
         video_file.save(video_path)
         
         # Initialize video processing if not already initialized
         if video_processor is None:
-            logger.info("Initializing video processor")
             video_processor = VideoProcessor()
         
-        # Process video and wait for completion
-        logger.info("Starting video processing")
+        # Process video
         try:
             video_processor.process_video(video_path)
             
-            # Only return success if processing is complete
-            if video_processor.processing_complete:
-                logger.info(f"Video processing complete. Total frames: {len(video_processor.frames)}")
-                return jsonify({
-                    'message': 'Video processed successfully',
-                    'total_frames': len(video_processor.frames)
-                })
-            else:
-                logger.error("Video processing incomplete")
-                return jsonify({'error': 'Video processing incomplete'}), 500
+            if not video_processor.processing_complete:
+                return jsonify({'error': 'Video processing failed'}), 500
                 
+            if not video_processor.frames or not video_processor.frame_captions:
+                return jsonify({'error': 'No frames or captions generated'}), 500
+                
+            return jsonify({
+                'message': 'Video processed successfully',
+                'total_frames': len(video_processor.frames),
+                'captions_generated': len(video_processor.frame_captions)
+            })
+            
         except Exception as e:
             logger.error(f"Error processing video: {str(e)}", exc_info=True)
             return jsonify({'error': str(e)}), 500
@@ -714,32 +711,24 @@ def chat():
         
         # Check video processor state
         if not video_processor:
-            logger.error("No video processor initialized")
             return jsonify({'error': 'Please upload a video first'}), 400
             
-        logger.info(f"Video processor state - Processing complete: {video_processor.processing_complete}, Frames: {len(video_processor.frames)}, Captions: {len(video_processor.frame_captions)}")
-        
         if not video_processor.processing_complete:
-            logger.error("Video still processing")
             return jsonify({'error': 'Video is still processing'}), 400
             
         # Validate request data
         if not request.is_json:
-            logger.error("Request is not JSON")
             return jsonify({'error': 'Request must be JSON'}), 400
             
         data = request.get_json()
         if not data or 'query' not in data:
-            logger.error("No query in request data")
             return jsonify({'error': 'No query provided'}), 400
             
         query = data['query']
         current_frame = data.get('current_frame', 0)
-        logger.info(f"Processing query: '{query}' for frame {current_frame}")
         
         # Validate frame index
         if current_frame >= len(video_processor.frames):
-            logger.error(f"Invalid frame index: {current_frame}")
             return jsonify({'error': 'Invalid frame index'}), 400
             
         # Get current frame
@@ -751,12 +740,9 @@ def chat():
             # Save frame
             success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
             if not success:
-                logger.error("Failed to save frame")
                 return jsonify({'error': 'Failed to save frame'}), 500
             
-            logger.info(f"Frame saved to {temp_path}")
-            
-            # Construct command with GPU acceleration
+            # Construct command
             cmd = [
                 video_processor.cli_path,
                 "-m", video_processor.model_path,
@@ -773,11 +759,10 @@ def chat():
                 "-p", query
             ]
             
-            logger.info(f"Running command: {' '.join(cmd)}")
-            
-            # Execute command with timeout and retries
+            # Execute command with retries
             max_retries = 3
             retry_count = 0
+            last_error = None
             
             while retry_count < max_retries:
                 try:
@@ -789,7 +774,7 @@ def chat():
                         check=True
                     )
                     
-                    # Process model output
+                    # Process output
                     lines = result.stdout.split('\n')
                     response_lines = []
                     capture_response = False
@@ -808,45 +793,38 @@ def chat():
                     
                     if not response:
                         retry_count += 1
-                        if retry_count < max_retries:
-                            logger.warning(f"Empty response, retrying ({retry_count}/{max_retries})")
-                            time.sleep(1)
-                            continue
-                        return jsonify({'error': 'No response generated'}), 500
+                        last_error = "Empty response from model"
+                        time.sleep(1)
+                        continue
                     
-                    logger.info(f"Generated response: {response}")
                     return jsonify({'response': response})
                     
                 except subprocess.TimeoutExpired:
                     retry_count += 1
-                    if retry_count < max_retries:
-                        logger.warning(f"Timeout, retrying ({retry_count}/{max_retries})")
-                        time.sleep(1)
-                        continue
-                    return jsonify({'error': 'Request timed out'}), 504
+                    last_error = "Request timed out"
+                    time.sleep(1)
+                    continue
                     
                 except subprocess.CalledProcessError as e:
                     retry_count += 1
-                    if retry_count < max_retries:
-                        logger.warning(f"Command failed, retrying ({retry_count}/{max_retries})")
-                        time.sleep(1)
+                    last_error = f"Command failed: {e.stderr}"
+                    time.sleep(1)
                         continue
-                    logger.error(f"Command failed after retries: {e.stderr}")
-                    return jsonify({'error': 'Command failed'}), 500
-                    
+                        
                 except Exception as e:
-                    logger.error(f"Unexpected error: {str(e)}")
-                    return jsonify({'error': str(e)}), 500
+                        return jsonify({'error': str(e)}), 500
                     
+            # If we get here, all retries failed
+            return jsonify({'error': last_error or 'Failed to process request'}), 500
+            
         finally:
             # Clean up temp file
             if os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
-                    logger.info(f"Cleaned up temp file: {temp_path}")
                 except Exception as e:
                     logger.error(f"Failed to clean up temp file: {str(e)}")
-            
+                    
     except Exception as e:
         logger.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
         return jsonify({'error': str(e)}), 500
@@ -855,11 +833,21 @@ def chat():
 def get_frame(frame_idx):
     global video_processor
     try:
-        if not video_processor or frame_idx >= len(video_processor.frames):
+        if not video_processor:
+            return jsonify({'error': 'Video processor not initialized'}), 400
+            
+        if frame_idx >= len(video_processor.frames):
             return jsonify({'error': 'Invalid frame index'}), 400
             
         frame = video_processor.frames[frame_idx]
-        caption = video_processor.frame_captions[frame_idx] if frame_idx < len(video_processor.frame_captions) else "No caption available"
+        
+        # Ensure we have captions
+        if not video_processor.frame_captions or frame_idx >= len(video_processor.frame_captions):
+            caption = "Caption not available"
+        else:
+            caption = video_processor.frame_captions[frame_idx]
+            if not caption or caption.startswith("Error:"):
+                caption = "Caption generation failed"
         
         try:
             # Convert frame to base64

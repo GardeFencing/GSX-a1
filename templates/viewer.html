@@ -197,89 +197,70 @@
                     })
                 });
                 
-                // Check if response is JSON
-                const contentType = response.headers.get('content-type');
-                if (!contentType || !contentType.includes('application/json')) {
-                    throw new Error('Server returned non-JSON response');
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Failed to get response');
                 }
                 
                 const data = await response.json();
-                
-                if (response.ok) {
-                    if (data.response) {
-                        addMessage(data.response);
-                    } else {
-                        throw new Error('No response in data');
-                    }
-                } else {
-                    throw new Error(data.error || 'Server returned an error');
+                if (data.error) {
+                    throw new Error(data.error);
                 }
+                
+                addMessage(data.response);
+                
             } catch (error) {
-                console.error('Chat error:', error);
-                addMessage('Error: ' + (error.message || 'Failed to process request'));
+                console.error('Error in chat:', error);
+                addMessage(`Error: ${error.message}`, false);
             }
         }
         
-        // Event handlers
-        function handlePrevFrame() {
-            if (state.currentFrame > 0) loadFrame(state.currentFrame - 1);
-        }
-        
-        function handleNextFrame() {
-            if (state.currentFrame < state.totalFrames - 1) loadFrame(state.currentFrame + 1);
-        }
-        
-        function handlePlayPause() {
-            state.isPlaying = !state.isPlaying;
-            this.textContent = state.isPlaying ? 'Pause' : 'Play';
-            
-            if (state.isPlaying) {
-                state.playInterval = setInterval(() => {
-                    if (state.currentFrame >= state.totalFrames - 1) {
-                        state.isPlaying = false;
-                        this.textContent = 'Play';
-                        clearInterval(state.playInterval);
-                        return;
-                    }
-                    loadFrame(state.currentFrame + 1);
-                }, 200);
-            } else {
-                clearInterval(state.playInterval);
-            }
-        }
-        
-        function handleKeyboardControls(e) {
-            // Don't handle keyboard events if chat input is focused
-            if (document.activeElement.id === 'chat-input') {
-                return;
-            }
-            
-            switch(e.key) {
-                case 'ArrowLeft':
-                    handlePrevFrame();
-                    break;
-                case 'ArrowRight':
-                    handleNextFrame();
-                    break;
-                case ' ':
-                    document.getElementById('play-pause').click();
-                    e.preventDefault();
-                    break;
-            }
-        }
-        
-        // Initialize event listeners
-        document.getElementById('prev-frame').addEventListener('click', handlePrevFrame);
-        document.getElementById('next-frame').addEventListener('click', handleNextFrame);
-        document.getElementById('play-pause').addEventListener('click', handlePlayPause);
+        // Event listeners
         document.getElementById('send-message').addEventListener('click', sendMessage);
         document.getElementById('chat-input').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') sendMessage();
         });
-        document.addEventListener('keydown', handleKeyboardControls);
-        slider.addEventListener('input', (e) => loadFrame(parseInt(e.target.value)));
         
-        // Load initial frame
+        // Frame navigation
+        document.getElementById('prev-frame').addEventListener('click', () => {
+            if (state.currentFrame > 0) {
+                loadFrame(state.currentFrame - 1);
+            }
+        });
+        
+        document.getElementById('next-frame').addEventListener('click', () => {
+            if (state.currentFrame < state.totalFrames - 1) {
+                loadFrame(state.currentFrame + 1);
+            }
+        });
+        
+        slider.addEventListener('input', (e) => {
+            loadFrame(parseInt(e.target.value));
+        });
+        
+        // Play/Pause functionality
+        document.getElementById('play-pause').addEventListener('click', () => {
+            const button = document.getElementById('play-pause');
+            if (state.isPlaying) {
+                clearInterval(state.playInterval);
+                state.isPlaying = false;
+                button.textContent = 'Play';
+            } else {
+                state.playInterval = setInterval(() => {
+                    if (state.currentFrame < state.totalFrames - 1) {
+                        loadFrame(state.currentFrame + 1);
+                    } else {
+                        clearInterval(state.playInterval);
+                        state.isPlaying = false;
+                        button.textContent = 'Play';
+                    }
+                }, 1000);
+                state.isPlaying = true;
+                button.textContent = 'Pause';
+            }
+        });
+        
+        // Initial frame load
         loadFrame(0);
     </script>
 </body>
