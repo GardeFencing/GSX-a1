@@ -456,7 +456,7 @@ class MovementAnalyzer:
 # ------------------------------------------------------------------------------
 
 class VideoProcessor:
-    """Process video files and extract frames using MiniCPM-V's approach"""
+    """Process video files and extract frames using optimized approach"""
     _instance = None  # Singleton instance
     
     def __new__(cls):
@@ -488,7 +488,8 @@ class VideoProcessor:
         self.executor = ThreadPoolExecutor(max_workers=4)
         
         # Constants for frame processing
-        self.MAX_FRAMES = 32  # Reduced from 64 to balance speed and memory
+        self.MAX_FRAMES = 32  # Balance between speed and memory
+        self.FRAME_DIFFERENCE_THRESHOLD = 10.0  # Threshold for frame difference detection
         
         print(f"Model path: {self.model_path}")
         print(f"MMPROJ path: {self.mmproj_path}")
@@ -502,11 +503,24 @@ class VideoProcessor:
         gap = len(frame_indices) / n
         return [int(i * gap + gap / 2) for i in range(n)]
     
+    def _calculate_frame_difference(self, current_frame: np.ndarray, prev_frame: Optional[np.ndarray]) -> float:
+        """Calculate difference between consecutive frames to detect significant changes"""
+        if prev_frame is None:
+            return float('inf')
+        
+        # Convert to grayscale for faster processing
+        curr_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
+        prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+        
+        # Calculate absolute difference
+        diff = cv2.absdiff(curr_gray, prev_gray)
+        return np.mean(diff)
+    
     def process_single_frame(self, frame: np.ndarray, frame_idx: int, fps: float) -> str:
         """Process a single frame and return its caption"""
         temp_path = os.path.join(self.temp_dir, f"frame_{frame_idx}.jpg")
         try:
-            # Save frame as temporary file
+            # Save frame as temporary file with high quality
             success = cv2.imwrite(temp_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
                                 [cv2.IMWRITE_JPEG_QUALITY, 95])
             if not success:
@@ -535,33 +549,28 @@ class VideoProcessor:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=180,
+                timeout=180,  # Increased timeout for complex frames
                 check=False
             )
             
             if result.returncode != 0:
                 return f"Error: Command failed with code {result.returncode}"
             
-            # Process output
+            # Process output to extract caption
             lines = result.stdout.split('\n')
-            response_lines = []
-            capture_response = False
-            
+            caption_lines = []
             for line in lines:
-                line = line.strip()
-                if '<assistant>' in line.lower():
-                    capture_response = True
-                    continue
-                if capture_response and ('<user>' in line.lower() or 'llama_print' in line.lower()):
-                    break
-                if capture_response and line:
-                    response_lines.append(line)
+                if line and not line.startswith('>') and not line.startswith('llama_print_timings'):
+                    caption_lines.append(line.strip())
             
-            return ' '.join(response_lines).strip() or "No caption generated"
-                
+            return " ".join(caption_lines)
+            
+        except subprocess.TimeoutExpired:
+            return "Error: Frame processing timed out"
         except Exception as e:
             return f"Error: {str(e)}"
         finally:
+            # Cleanup temporary file
             if os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
@@ -587,10 +596,10 @@ class VideoProcessor:
             
             # Get video properties
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            fps = int(cap.get(cv2.CAP_PROP_FPS))
+            fps = cap.get(cv2.CAP_PROP_FPS)
             
             # Calculate frame sampling interval (1 frame per second)
-            sample_interval = max(1, fps)
+            sample_interval = max(1, int(fps))
             frame_indices = list(range(0, total_frames, sample_interval))
             
             # Uniformly sample frames if too many
@@ -602,26 +611,35 @@ class VideoProcessor:
             print(f"- FPS: {fps}")
             print(f"- Selected frames: {len(frame_indices)}")
             
-            # Extract frames
+            # Extract frames with similarity detection
             frames_with_indices = []
+            prev_frame = None
+            
             for frame_idx in frame_indices:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
                 ret, frame = cap.read()
                 if ret:
+                    # Skip if too similar to previous frame
+                    if prev_frame is not None:
+                        diff = self._calculate_frame_difference(frame, prev_frame)
+                        if diff < self.FRAME_DIFFERENCE_THRESHOLD:
+                            continue
+                    
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     frames_with_indices.append((frame_rgb, frame_idx))
                     self.frames.append(frame_rgb)
+                    prev_frame = frame
             
             cap.release()
             
             if not frames_with_indices:
                 raise ValueError("No frames were extracted")
             
-            # Process frames in parallel
+            # Process frames in parallel with improved error handling
             print("\nProcessing frames with GPU acceleration...")
             future_to_frame = {
                 self.executor.submit(self.process_single_frame, frame, idx, fps): idx 
-                for idx, frame in enumerate(self.frames)
+                for frame, idx in frames_with_indices
             }
             
             # Collect results in order
@@ -809,10 +827,10 @@ def chat():
                     retry_count += 1
                     last_error = f"Command failed: {e.stderr}"
                     time.sleep(1)
-                        continue
-                        
+                    continue
+                    
                 except Exception as e:
-                        return jsonify({'error': str(e)}), 500
+                    return jsonify({'error': str(e)}), 500
                     
             # If we get here, all retries failed
             return jsonify({'error': last_error or 'Failed to process request'}), 500

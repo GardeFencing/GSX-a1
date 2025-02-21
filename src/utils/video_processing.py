@@ -9,66 +9,74 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Constants
-MAX_NUM_FRAMES = 32  # Maximum number of frames to process
+MAX_NUM_FRAMES = 64  # If CUDA OOM, set a smaller number
 
 def uniform_sample(l: List, n: int) -> List:
-    """Uniformly samples n elements from list l"""
-    if not l:
-        return []
+    """
+    Uniformly samples elements from a list.
+    
+    Args:
+        - l (list): The input list.
+        - n (int): The number of elements to sample.
+        
+    Returns:
+        list: A list of sampled elements.
+    """
     gap = len(l) / n
-    return [l[int(i * gap + gap / 2)] for i in range(n)]
+    idxs = [int(i * gap + gap / 2) for i in range(n)]
+    return [l[i] for i in idxs]
 
 def encode_video(video_path: str) -> List[Image.Image]:
     """
     Encodes a video file into a list of frames.
     
     Args:
-        video_path (str): Path to the video file
+        video_path (str): The path to the video file.
         
     Returns:
-        List[Image.Image]: List of video frames as PIL Images
+        list: A list of frames, where each frame is represented as an Image object.
     """
     try:
         # Open video file
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
-            raise ValueError("Could not open video file")
-        
+            raise ValueError(f"Could not open video file: {video_path}")
+            
         # Get video properties
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        fps = cap.get(cv2.CAP_PROP_FPS)
         
-        # Calculate frame sampling interval
-        sample_interval = max(1, fps // 2)  # Sample at 1/2 fps
+        # Calculate frame sampling interval (1 frame per second)
+        sample_interval = max(1, int(fps))
         frame_indices = list(range(0, total_frames, sample_interval))
         
-        # Limit number of frames
+        # Uniformly sample frames if the number of frames is too large
         if len(frame_indices) > MAX_NUM_FRAMES:
             frame_indices = uniform_sample(frame_indices, MAX_NUM_FRAMES)
-        
+            
         # Extract frames
-        pil_frames = []
-        frame_count = 0
-        
-        while cap.isOpened():
+        frames = []
+        for frame_idx in frame_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
             if not ret:
                 break
                 
-            if frame_count in frame_indices:
-                # Convert BGR to RGB
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_frame = Image.fromarray(frame_rgb)
-                pil_frames.append(pil_frame)
-                
-            frame_count += 1
+            # Convert BGR to RGB
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_frame = Image.fromarray(frame_rgb)
+            frames.append(pil_frame)
             
-            if len(pil_frames) >= len(frame_indices):
-                break
-        
+        # Release video capture
         cap.release()
-        logger.info(f"Processed {len(pil_frames)} frames from video")
-        return pil_frames
+        
+        if not frames:
+            raise ValueError(f"No frames could be extracted from video: {video_path}")
+            
+        # Log the successful encoding of the video
+        logger.info(f"Video encoded successfully. Extracted {len(frames)} frames.")
+        
+        return frames
         
     except Exception as e:
         logger.error(f"Error encoding video: {str(e)}")
