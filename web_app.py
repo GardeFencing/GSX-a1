@@ -48,10 +48,10 @@ class VideoAnalyzer:
                 "./llama-minicpmv-cli",
                 "-m", self.model_path,
                 "--mmproj", self.mmproj_path,
-                "-c", "8192",
+                "-c", "4096",  # Reduced from 8192 for faster processing
                 "--temp", "0.7",
                 "--top-p", "0.8",
-                "--top-k", "100",
+                "--top-k", "40",  # Reduced from 100 for faster processing
                 "--repeat-penalty", "1.05",
                 "--video", abs_video_path,
                 "-p", query
@@ -121,18 +121,11 @@ def upload_video():
         file_size = os.path.getsize(video_path)
         logger.info(f"Video file size: {file_size} bytes")
         
-        # Perform initial analysis with coaching prompt
+        # Perform initial analysis
         logger.info("Starting initial video analysis...")
         initial_analysis = video_analyzer.analyze_video(
             video_path,
-            """As an expert fencing coach, provide a detailed analysis report of this video. Include:
-            1. Overview of the technique(s) demonstrated
-            2. Technical execution analysis (body position, footwork, blade work)
-            3. Key strengths observed
-            4. Areas for improvement
-            5. Specific recommendations for practice
-            
-            Format this as a structured coaching report."""
+            "Describe the fencing techniques and movements shown in this video, focusing on form and execution."
         )
         logger.info("Initial analysis completed successfully")
         
@@ -149,29 +142,21 @@ def upload_video():
 def chat():
     if not video_analyzer.current_video:
         return jsonify({'error': 'No video has been uploaded yet'}), 400
-            
-        data = request.get_json()
-        if not data or 'query' not in data:
-            return jsonify({'error': 'No query provided'}), 400
-            
+    
+    data = request.get_json()
+    if not data or 'query' not in data:
+        return jsonify({'error': 'No query provided'}), 400
+    
     try:
         logger.info(f"Processing chat query for video: {video_analyzer.current_video}")
         logger.info(f"Query: {data['query']}")
         
-        # Enhance the query with coaching context
-        coaching_query = f"""As an expert fencing coach analyzing this video, {data['query']}
-
-        Consider:
-        - Technical execution
-        - Body mechanics
-        - Timing and distance
-        - Strategic implications
-        
-        Provide specific, actionable feedback in your response."""
+        # Keep the query simple but focused on fencing
+        query = f"Regarding the fencing techniques in this video: {data['query']}"
         
         response = video_analyzer.analyze_video(
             video_analyzer.current_video,
-            coaching_query
+            query
         )
         
         logger.info("Chat response generated successfully")
