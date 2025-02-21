@@ -620,21 +620,21 @@ class VideoProcessor:
             # Process frames in parallel
             print("\nProcessing frames with GPU acceleration...")
             future_to_frame = {
-                self.executor.submit(self.process_single_frame, frame, idx, fps): idx 
-                for frame, idx in frames_with_indices
+                self.executor.submit(self.process_single_frame, frame, frame_idx, fps): (frame_idx, frame_idx) 
+                for frame_idx, frame in enumerate(self.frames)
             }
             
             # Collect results in order
-            captions = [None] * len(frames_with_indices)
+            captions = [None] * len(self.frames)
             for future in as_completed(future_to_frame):
-                idx = future_to_frame[future]
+                frame_idx, orig_idx = future_to_frame[future]
                 try:
                     caption = future.result()
-                    captions[frames_with_indices.index((self.frames[idx], idx))] = caption
-                    print(f"Processed frame {idx+1}/{len(frames_with_indices)}")
+                    captions[frame_idx] = caption
+                    print(f"Processed frame {frame_idx+1}/{len(self.frames)}")
                 except Exception as e:
-                    print(f"Error processing frame {idx}: {str(e)}")
-                    captions[frames_with_indices.index((self.frames[idx], idx))] = f"Error: {str(e)}"
+                    print(f"Error processing frame {frame_idx}: {str(e)}")
+                    captions[frame_idx] = f"Error: {str(e)}"
             
             self.frame_captions = captions
             self.processing_complete = True
