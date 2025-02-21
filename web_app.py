@@ -18,6 +18,7 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 class VideoAnalyzer:
     def __init__(self):
+        self.base_dir = os.path.abspath(os.getcwd())
         self.llama_cpp_path = os.path.expanduser("~/GSX-a1/llama.cpp")
         self.model_path = os.path.expanduser("~/GSX-a1/MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf")
         self.mmproj_path = os.path.expanduser("~/GSX-a1/MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf")
@@ -36,6 +37,13 @@ class VideoAnalyzer:
     def analyze_video(self, video_path, query):
         """Analyze video using MiniCPM-V"""
         try:
+            # Convert video path to absolute path relative to base directory
+            abs_video_path = os.path.abspath(video_path)
+            if not os.path.exists(abs_video_path):
+                raise RuntimeError(f"Video file not found at {abs_video_path}")
+
+            logger.info(f"Analyzing video: {abs_video_path}")
+            
             cmd = [
                 "./llama-minicpmv-cli",
                 "-m", self.model_path,
@@ -45,7 +53,7 @@ class VideoAnalyzer:
                 "--top-p", "0.8",
                 "--top-k", "100",
                 "--repeat-penalty", "1.05",
-                "--video", video_path,
+                "--video", abs_video_path,
                 "-p", query
             ]
             
@@ -60,7 +68,12 @@ class VideoAnalyzer:
                 check=True
             )
             
-            return result.stdout.strip()
+            # Check if output is empty or contains error messages
+            output = result.stdout.strip()
+            if not output or "error" in output.lower():
+                raise RuntimeError(f"Failed to analyze video. Output: {output}")
+            
+            return output
             
         except subprocess.CalledProcessError as e:
             logger.error(f"Error running video analysis: {e.stderr}")
@@ -94,6 +107,10 @@ def upload_video():
         # Store the current video path
         video_analyzer.current_video = video_path
         
+        # Verify file exists and is readable
+        if not os.path.exists(video_path):
+            raise RuntimeError(f"Failed to save video file at {video_path}")
+        
         # Perform initial analysis
         initial_analysis = video_analyzer.analyze_video(
             video_path,
@@ -113,18 +130,18 @@ def upload_video():
 def chat():
     if not video_analyzer.current_video:
         return jsonify({'error': 'No video has been uploaded yet'}), 400
-    
-    data = request.get_json()
-    if not data or 'query' not in data:
-        return jsonify({'error': 'No query provided'}), 400
-    
+            
+        data = request.get_json()
+        if not data or 'query' not in data:
+            return jsonify({'error': 'No query provided'}), 400
+            
     try:
         response = video_analyzer.analyze_video(
             video_analyzer.current_video,
             data['query']
         )
         return jsonify({'response': response})
-        
+            
     except Exception as e:
         logger.error(f"Error processing chat query: {e}")
         return jsonify({'error': str(e)}), 500
