@@ -775,50 +775,69 @@ def chat():
             
             logger.info(f"Running command: {' '.join(cmd)}")
             
-            # Execute command with timeout
-            try:
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=180,
-                    check=True  # This will raise CalledProcessError if return code is non-zero
-                )
-                
-                # Process model output
-                lines = result.stdout.split('\n')
-                response_lines = []
-                capture_response = False
-                
-                for line in lines:
-                    line = line.strip()
-                    if '<assistant>' in line.lower():
-                        capture_response = True
+            # Execute command with timeout and retries
+            max_retries = 3
+            retry_count = 0
+            
+            while retry_count < max_retries:
+                try:
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=180,
+                        check=True
+                    )
+                    
+                    # Process model output
+                    lines = result.stdout.split('\n')
+                    response_lines = []
+                    capture_response = False
+                    
+                    for line in lines:
+                        line = line.strip()
+                        if '<assistant>' in line.lower():
+                            capture_response = True
+                            continue
+                        if capture_response and ('<user>' in line.lower() or 'llama_print' in line.lower()):
+                            break
+                        if capture_response and line:
+                            response_lines.append(line)
+                    
+                    response = ' '.join(response_lines).strip()
+                    
+                    if not response:
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            logger.warning(f"Empty response, retrying ({retry_count}/{max_retries})")
+                            time.sleep(1)
+                            continue
+                        return jsonify({'error': 'No response generated'}), 500
+                    
+                    logger.info(f"Generated response: {response}")
+                    return jsonify({'response': response})
+                    
+                except subprocess.TimeoutExpired:
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        logger.warning(f"Timeout, retrying ({retry_count}/{max_retries})")
+                        time.sleep(1)
                         continue
-                    if capture_response and ('<user>' in line.lower() or 'llama_print' in line.lower()):
-                        break
-                    if capture_response and line:
-                        response_lines.append(line)
-                
-                response = ' '.join(response_lines).strip()
-                
-                if not response:
-                    logger.error("No response generated from model")
-                    return jsonify({'error': 'No response generated'}), 500
-                
-                logger.info(f"Generated response: {response}")
-                return jsonify({'response': response})
-                
-            except subprocess.TimeoutExpired as e:
-                logger.error(f"Command timed out: {str(e)}")
-                return jsonify({'error': 'Request timed out'}), 504
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Command failed with code {e.returncode}: {e.stderr}")
-                return jsonify({'error': f'Command failed: {e.stderr}'}), 500
-            except Exception as e:
-                logger.error(f"Error running command: {str(e)}")
-                return jsonify({'error': str(e)}), 500
-                
+                    return jsonify({'error': 'Request timed out'}), 504
+                    
+                except subprocess.CalledProcessError as e:
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        logger.warning(f"Command failed, retrying ({retry_count}/{max_retries})")
+                        time.sleep(1)
+                        continue
+                    logger.error(f"Command failed after retries: {e.stderr}")
+                    return jsonify({'error': 'Command failed'}), 500
+                    
+                except Exception as e:
+                    logger.error(f"Unexpected error: {str(e)}")
+                    return jsonify({'error': str(e)}), 500
+                    
         finally:
             # Clean up temp file
             if os.path.exists(temp_path):

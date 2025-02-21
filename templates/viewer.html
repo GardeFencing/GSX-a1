@@ -112,9 +112,10 @@
 
     <script>
         // Initialize variables
+        const totalFrames = {{ total_frames }};  // Get from Flask template
         const state = {
             currentFrame: 0,
-            totalFrames: Number({{ total_frames }}),
+            totalFrames: totalFrames,
             isPlaying: false,
             playInterval: null,
             frameData: {}
@@ -122,10 +123,10 @@
         
         // Initialize slider
         const slider = document.getElementById('frame-slider');
-        slider.max = state.totalFrames - 1;
+        slider.max = totalFrames - 1;
         
         // Update total frames display
-        document.getElementById('total-frames').textContent = state.totalFrames;
+        document.getElementById('total-frames').textContent = totalFrames;
         
         async function loadFrame(index) {
             try {
