@@ -137,32 +137,7 @@ def upload_video():
         logger.info("Generating initial coach's report...")
         initial_report = video_analyzer.analyze_video(
             video_path,
-            """As an expert fencing coach, provide a detailed technical analysis report of this video. Structure your response as follows:
-
-            COACH'S INITIAL ASSESSMENT
-            -------------------------
-            1. TECHNIQUE OVERVIEW
-            - Identify the specific fencing actions/techniques shown
-            - Evaluate the overall execution quality
-
-            2. TECHNICAL BREAKDOWN
-            - Body Position and Alignment
-            - Footwork Analysis
-            - Blade Control and Hand Position
-            - Distance Management
-            - Timing and Rhythm
-
-            3. KEY OBSERVATIONS
-            - Notable Strengths
-            - Areas Needing Attention
-            - Critical Technical Points
-
-            4. RECOMMENDATIONS
-            - Specific Drills for Improvement
-            - Focus Points for Next Practice
-            - Training Priorities
-
-            Please be specific and technical in your analysis, focusing on competitive fencing aspects."""
+            """As a fencing coach, give me a detailed but conversational analysis of this video. Focus on the fencer's technique, what they're doing well, and specific areas where they could improve. Include clear, actionable feedback that would help them enhance their performance."""
         )
         logger.info("Initial report generated successfully")
         
@@ -189,15 +164,7 @@ def chat():
         logger.info(f"Query: {data['query']}")
         
         # Enhance the query with coaching context
-        coaching_query = f"""As an expert fencing coach analyzing this video, {data['query']}
-
-        Consider:
-        - Technical execution
-        - Body mechanics
-        - Timing and distance
-        - Strategic implications
-        
-        Provide specific, actionable feedback in your response."""
+        coaching_query = f"""As a fencing coach watching this video, {data['query']} Give specific, practical advice based on what you observe."""
         
         response = video_analyzer.analyze_video(
             video_analyzer.current_video,
