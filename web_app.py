@@ -33,6 +33,11 @@ class VideoAnalyzer:
             raise RuntimeError(f"Model file not found at {self.model_path}")
         if not os.path.exists(self.mmproj_path):
             raise RuntimeError(f"MM project model not found at {self.mmproj_path}")
+        
+        # Verify llama-minicpmv-cli exists
+        cli_path = os.path.join(self.llama_cpp_path, "llama-minicpmv-cli")
+        if not os.path.exists(cli_path):
+            raise RuntimeError(f"llama-minicpmv-cli not found at {cli_path}")
 
     def analyze_video(self, video_path, query):
         """Analyze video using MiniCPM-V"""
@@ -43,20 +48,19 @@ class VideoAnalyzer:
                 raise RuntimeError(f"Video file not found at {abs_video_path}")
 
             logger.info(f"Analyzing video: {abs_video_path}")
+            logger.info(f"Video file size: {os.path.getsize(abs_video_path)} bytes")
             
-            # Optimize parameters for faster inference
+            # Use original parameters that are known to work
             cmd = [
                 "./llama-minicpmv-cli",
                 "-m", self.model_path,
                 "--mmproj", self.mmproj_path,
-                "-c", "4096",  # Reduced context size
-                "--temp", "0.2",
+                "-c", "8192",        # Original context size
+                "--temp", "0.7",     # Original temperature
                 "--top-p", "0.8",
-                "--top-k", "40",  # Reduced top_k
+                "--top-k", "100",    # Original top_k
                 "--repeat-penalty", "1.05",
-                "-t", "4",  # Use 4 threads
-                "-n", "1024",  # Limit token generation
-                "--video", abs_video_path,
+                "--video", abs_video_path,  # Use --video flag
                 "-p", query
             ]
             
@@ -74,8 +78,14 @@ class VideoAnalyzer:
             
             # Check if output is empty or contains error messages
             output = result.stdout.strip()
-            if not output or "error" in output.lower():
+            if not output:
+                raise RuntimeError("No output generated from video analysis")
+            if "error" in output.lower():
                 raise RuntimeError(f"Failed to analyze video. Output: {output}")
+            
+            # Log success
+            logger.info("Video analysis completed successfully")
+            logger.info(f"Output length: {len(output)} characters")
             
             return output
             
