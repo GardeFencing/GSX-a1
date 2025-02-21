@@ -564,27 +564,17 @@ class VideoProcessor:
                 logger.error(f"MMPROJ file not found at {self.mmproj_path}")
                 return "Error: MMPROJ file not found"
             
-            # Calculate optimal memory settings based on system resources
-            total_memory = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
-            available_memory = total_memory * 0.8  # Use 80% of total memory
-            per_thread_memory = available_memory / max(4, os.cpu_count() - 2)
-            
-            # Construct command with memory-optimized parameters
+            # Construct command with optimized parameters
             cmd = [
                 self.cli_path,
                 "-m", os.path.abspath(self.model_path),
                 "--mmproj", os.path.abspath(self.mmproj_path),
-                "-t", str(max(4, os.cpu_count() - 2)),  # Use more threads but leave some for system
-                "-n", "256",  # Reduced token limit to save memory
+                "-t", str(max(4, os.cpu_count() - 2)),
+                "-n", "256",
                 "--temp", "0.1",
-                "--ctx-size", "2048",  # Reduced context size to save memory
+                "--ctx-size", "2048",
                 "--top-p", "0.7",
                 "--top-k", "40",
-                "--memory-f32",  # Use f32 for better stability
-                "--mlock",  # Lock memory to prevent swapping
-                "--memory-f16",  # Use f16 where possible to save memory
-                "--rope-freq-base", "10000",  # Adjust rope parameters for stability
-                "--rope-freq-scale", "0.5",
                 "--image", os.path.abspath(temp_path),
                 "-p", "Describe what is happening in this frame."
             ]
@@ -596,48 +586,38 @@ class VideoProcessor:
             retry_count = 0
             while retry_count < max_retries:
                 try:
-                    # Add environment variables to help with stability
-                    env = os.environ.copy()
-                    env["OMP_NUM_THREADS"] = str(max(4, os.cpu_count() - 2))
-                    env["MKL_NUM_THREADS"] = str(max(4, os.cpu_count() - 2))
-                    env["MALLOC_ARENA_MAX"] = "2"  # Limit memory fragmentation
-                    env["OMP_STACKSIZE"] = "256M"  # Set reasonable stack size
-                    
                     result = subprocess.run(
                         cmd,
                         capture_output=True,
                         text=True,
                         timeout=180,
-                        env=env,
                         check=False  # Don't raise on non-zero exit
                     )
-                    
-                    # Check for SIGSEGV
-                    if result.returncode == -11:  # SIGSEGV
-                        logger.warning(f"SIGSEGV occurred for frame {frame_idx}, attempt {retry_count + 1}")
-                        retry_count += 1
-                        if retry_count < max_retries:
-                            time.sleep(5)  # Longer wait between retries
-                            continue
-                        return "Error: Model crashed (SIGSEGV)"
                     
                     # Process output
                     if result.stdout:
                         lines = result.stdout.split('\n')
                         caption_lines = []
                         for line in lines:
-                            if line and not line.startswith('>') and not line.startswith('llama_print'):
-                                caption_lines.append(line.strip())
+                            line = line.strip()
+                            # Skip common non-caption lines
+                            if not line or line.startswith('>') or line.startswith('llama_print') or \
+                               line.startswith('system_info:') or line.startswith('<start>') or \
+                               line.startswith('<end>') or line.startswith('<|im_start|') or \
+                               line.startswith('<|im_end|') or line.startswith('Loading') or \
+                               'ggml' in line.lower() or 'llama' in line.lower():
+                                continue
+                            caption_lines.append(line)
                         
-                        caption = " ".join(caption_lines)
+                        caption = " ".join(caption_lines).strip()
                         if caption:
-                            logger.info(f"Successfully generated caption for frame {frame_idx}")
+                            logger.info(f"Generated caption for frame {frame_idx}: {caption[:100]}...")
                             return caption
                     
                     # If we get here, retry
                     retry_count += 1
                     if retry_count < max_retries:
-                        time.sleep(5)  # Longer wait between retries
+                        time.sleep(2)
                         continue
                     return "Error: No caption generated"
                     
@@ -645,7 +625,7 @@ class VideoProcessor:
                     logger.error(f"Timeout processing frame {frame_idx} (attempt {retry_count + 1})")
                     retry_count += 1
                     if retry_count < max_retries:
-                        time.sleep(5)
+                        time.sleep(2)
                         continue
                     return "Error: Frame processing timed out"
                     
@@ -653,7 +633,7 @@ class VideoProcessor:
                     logger.error(f"Error processing frame {frame_idx}: {str(e)}")
                     retry_count += 1
                     if retry_count < max_retries:
-                        time.sleep(5)
+                        time.sleep(2)
                         continue
                     return f"Error: {str(e)}"
             
@@ -982,20 +962,26 @@ def get_frame(frame_idx):
     global video_processor
     try:
         if not video_processor:
-            return jsonify({'error': 'Video processor not initialized'}), 400
+            logger.error("Get frame request failed: Video processor not initialized")
+            return jsonify({'error': 'Please upload a video first'}), 400
             
         if frame_idx >= len(video_processor.frames):
+            logger.error(f"Get frame request failed: Invalid frame index {frame_idx}")
             return jsonify({'error': 'Invalid frame index'}), 400
             
         frame = video_processor.frames[frame_idx]
         
-        # Ensure we have captions
-        if not video_processor.frame_captions or frame_idx >= len(video_processor.frame_captions):
-            caption = "Caption not available"
-        else:
+        # Get caption with better error handling
+        caption = None
+        if video_processor.frame_captions and frame_idx < len(video_processor.frame_captions):
             caption = video_processor.frame_captions[frame_idx]
-            if not caption or caption.startswith("Error:"):
-                caption = "Caption generation failed"
+            if caption and caption.startswith("Error:"):
+                logger.warning(f"Caption error for frame {frame_idx}: {caption}")
+                caption = None
+        
+        if caption is None:
+            logger.warning(f"No valid caption available for frame {frame_idx}")
+            caption = "Processing caption..."
         
         try:
             # Convert frame to base64
@@ -1008,19 +994,23 @@ def get_frame(frame_idx):
                 _, buffer = cv2.imencode('.jpg', frame)
                 frame_b64 = base64.b64encode(buffer).decode('utf-8')
             
-            return jsonify({
+            response_data = {
                 'frame': frame_b64,
                 'caption': caption,
                 'frame_number': frame_idx,
-                'total_frames': len(video_processor.frames)
-            })
+                'total_frames': len(video_processor.frames),
+                'processing_complete': video_processor.processing_complete
+            }
+            
+            logger.debug(f"Successfully retrieved frame {frame_idx} with caption")
+            return jsonify(response_data)
             
         except Exception as e:
-            logger.error(f"Error processing frame: {str(e)}")
+            logger.error(f"Error processing frame {frame_idx}: {str(e)}")
             return jsonify({'error': 'Error processing frame'}), 500
             
     except Exception as e:
-        logger.error(f"Error getting frame: {str(e)}")
+        logger.error(f"Error in get_frame endpoint: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/view_video')
