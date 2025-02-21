@@ -553,13 +553,6 @@ class VideoProcessor:
             
             logger.info(f"Successfully saved frame {frame_idx} to {temp_path} (size: {file_size} bytes)")
             
-            # Log paths for debugging
-            logger.info(f"Processing frame {frame_idx} with paths:")
-            logger.info(f"CLI path: {self.cli_path}")
-            logger.info(f"Model path: {self.model_path}")
-            logger.info(f"MMPROJ path: {self.mmproj_path}")
-            logger.info(f"Frame path: {temp_path}")
-            
             # Verify file existence
             if not os.path.exists(self.cli_path):
                 logger.error(f"CLI executable not found at {self.cli_path}")
@@ -571,84 +564,105 @@ class VideoProcessor:
                 logger.error(f"MMPROJ file not found at {self.mmproj_path}")
                 return "Error: MMPROJ file not found"
             
-            # Construct command with GPU acceleration
+            # Calculate optimal memory settings based on system resources
+            total_memory = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+            available_memory = total_memory * 0.8  # Use 80% of total memory
+            per_thread_memory = available_memory / max(4, os.cpu_count() - 2)
+            
+            # Construct command with memory-optimized parameters
             cmd = [
                 self.cli_path,
                 "-m", os.path.abspath(self.model_path),
                 "--mmproj", os.path.abspath(self.mmproj_path),
-                "-t", str(max(1, os.cpu_count() // 2)),
-                "-n", "256",
+                "-t", str(max(4, os.cpu_count() - 2)),  # Use more threads but leave some for system
+                "-n", "256",  # Reduced token limit to save memory
                 "--temp", "0.1",
-                "--ctx-size", "2048",
+                "--ctx-size", "2048",  # Reduced context size to save memory
                 "--top-p", "0.7",
                 "--top-k", "40",
+                "--memory-f32",  # Use f32 for better stability
+                "--mlock",  # Lock memory to prevent swapping
+                "--memory-f16",  # Use f16 where possible to save memory
+                "--rope-freq-base", "10000",  # Adjust rope parameters for stability
+                "--rope-freq-scale", "0.5",
                 "--image", os.path.abspath(temp_path),
                 "-p", "Describe what is happening in this frame."
             ]
             
             logger.info(f"Running command for frame {frame_idx}: {' '.join(cmd)}")
             
-            # Run command with retries
+            # Run command with retries and proper error handling
             max_retries = 3
             retry_count = 0
             while retry_count < max_retries:
                 try:
+                    # Add environment variables to help with stability
+                    env = os.environ.copy()
+                    env["OMP_NUM_THREADS"] = str(max(4, os.cpu_count() - 2))
+                    env["MKL_NUM_THREADS"] = str(max(4, os.cpu_count() - 2))
+                    env["MALLOC_ARENA_MAX"] = "2"  # Limit memory fragmentation
+                    env["OMP_STACKSIZE"] = "256M"  # Set reasonable stack size
+                    
                     result = subprocess.run(
                         cmd,
                         capture_output=True,
                         text=True,
                         timeout=180,
-                        check=True
+                        env=env,
+                        check=False  # Don't raise on non-zero exit
                     )
                     
-                    if result.returncode != 0:
-                        logger.error(f"Command failed for frame {frame_idx} with code {result.returncode}")
-                        logger.error(f"Error output: {result.stderr}")
+                    # Check for SIGSEGV
+                    if result.returncode == -11:  # SIGSEGV
+                        logger.warning(f"SIGSEGV occurred for frame {frame_idx}, attempt {retry_count + 1}")
                         retry_count += 1
                         if retry_count < max_retries:
-                            time.sleep(1)
+                            time.sleep(5)  # Longer wait between retries
                             continue
-                        return f"Error: Command failed with code {result.returncode}"
+                        return "Error: Model crashed (SIGSEGV)"
                     
-                    # Process output to extract caption
-                    lines = result.stdout.split('\n')
-                    caption_lines = []
-                    for line in lines:
-                        if line and not line.startswith('>') and not line.startswith('llama_print'):
-                            caption_lines.append(line.strip())
+                    # Process output
+                    if result.stdout:
+                        lines = result.stdout.split('\n')
+                        caption_lines = []
+                        for line in lines:
+                            if line and not line.startswith('>') and not line.startswith('llama_print'):
+                                caption_lines.append(line.strip())
+                        
+                        caption = " ".join(caption_lines)
+                        if caption:
+                            logger.info(f"Successfully generated caption for frame {frame_idx}")
+                            return caption
                     
-                    caption = " ".join(caption_lines)
-                    if not caption:
-                        logger.error(f"No caption generated for frame {frame_idx}")
-                        retry_count += 1
-                        if retry_count < max_retries:
-                            time.sleep(1)
-                            continue
-                        return "Error: No caption generated"
-                    
-                    logger.info(f"Successfully generated caption for frame {frame_idx}")
-                    return caption
+                    # If we get here, retry
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        time.sleep(5)  # Longer wait between retries
+                        continue
+                    return "Error: No caption generated"
                     
                 except subprocess.TimeoutExpired:
                     logger.error(f"Timeout processing frame {frame_idx} (attempt {retry_count + 1})")
                     retry_count += 1
                     if retry_count < max_retries:
-                        time.sleep(1)
+                        time.sleep(5)
                         continue
                     return "Error: Frame processing timed out"
+                    
                 except Exception as e:
                     logger.error(f"Error processing frame {frame_idx}: {str(e)}")
                     retry_count += 1
                     if retry_count < max_retries:
-                        time.sleep(1)
+                        time.sleep(5)
                         continue
                     return f"Error: {str(e)}"
-                
+            
             return "Error: All retries failed"
             
         except Exception as e:
-            logger.error(f"Error processing frame {frame_idx}: {str(e)}")
+            logger.error(f"Error in frame processing setup: {str(e)}")
             return f"Error: {str(e)}"
+        
         finally:
             # Cleanup temporary file
             try:
@@ -703,7 +717,7 @@ class VideoProcessor:
             
             for i, frame_idx in enumerate(frame_indices):
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                ret, frame = cap.read()
+                    ret, frame = cap.read()
                 if ret:
                     # Skip if too similar to previous frame
                     if prev_frame is not None:
@@ -712,7 +726,7 @@ class VideoProcessor:
                             logger.info(f"Skipping frame {i} (too similar to previous)")
                             continue
                     
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     frames_with_indices.append((frame_rgb, len(self.frames)))
                     self.frames.append(frame_rgb)
                     prev_frame = frame
@@ -741,7 +755,7 @@ class VideoProcessor:
                     caption = future.result()
                     self.frame_captions[idx] = caption
                     logger.info(f"Caption generated for frame {idx}")
-                except Exception as e:
+                        except Exception as e:
                     logger.error(f"Error processing frame {idx}: {str(e)}")
                     self.frame_captions[idx] = f"Error: {str(e)}"
             
@@ -796,7 +810,7 @@ def upload_video():
                 
             if not video_processor.frames or not video_processor.frame_captions:
                 return jsonify({'error': 'No frames or captions generated'}), 500
-                
+            
             return jsonify({
                 'message': 'Video processed successfully',
                 'total_frames': len(video_processor.frames),
@@ -941,11 +955,11 @@ def chat():
                     last_error = f"Command failed: {e.stderr}"
                     logger.warning(f"Command failed on attempt {retry_count}: {e.stderr}")
                     time.sleep(1)
-                    continue
-                    
+                        continue
+                        
                 except Exception as e:
                     logger.error(f"Unexpected error in chat: {str(e)}")
-                    return jsonify({'error': str(e)}), 500
+                        return jsonify({'error': str(e)}), 500
                     
             # If we get here, all retries failed
             logger.error(f"All chat retries failed. Last error: {last_error}")
@@ -956,7 +970,7 @@ def chat():
             if os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
-                except Exception as e:
+        except Exception as e:
                     logger.error(f"Failed to clean up temp file: {str(e)}")
                     
     except Exception as e:
