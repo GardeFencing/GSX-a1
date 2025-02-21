@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Video Question Answering</title>
+    <title>Video Analysis Chatbot</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body {
@@ -30,15 +30,15 @@
             max-height: 400px;
             margin: 20px auto;
         }
-        .caption-container {
-            margin: 15px 0;
-            padding: 10px;
+        .analysis-container {
+            margin: 20px 0;
+            padding: 20px;
             background-color: #f8f9fa;
             border-radius: 5px;
-            text-align: left;
+            white-space: pre-wrap;
         }
         .chat-container {
-            height: 300px;
+            height: 400px;
             overflow-y: auto;
             border: 1px solid #dee2e6;
             padding: 15px;
@@ -49,223 +49,156 @@
             display: none;
             margin: 20px 0;
         }
-        .parameter-slider {
-            margin: 15px 0;
+        .user-message {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 15px;
+            border-radius: 15px;
+            margin: 5px 0;
+            max-width: 80%;
+            margin-left: 20%;
         }
-        #currentCaption {
-            font-size: 1.1em;
-            color: #495057;
-            margin: 10px 0;
+        .ai-message {
+            background-color: #f1f3f5;
+            padding: 10px 15px;
+            border-radius: 15px;
+            margin: 5px 0;
+            max-width: 80%;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
         }
     </style>
 </head>
 <body>
     <div class="main-container">
-        <h1 class="mb-4">Video Question Answering</h1>
+        <h1 class="mb-4">Video Analysis Chatbot</h1>
         <p class="lead">Upload a video and ask questions about it. The AI will analyze the video and provide answers.</p>
 
         <div class="video-container">
             <input type="file" id="videoUpload" accept="video/*" class="form-control mb-3">
-            <video id="videoPreview" controls style="display: none;" ontimeupdate="updateCaption()"></video>
-            <div class="caption-container">
-                <strong>Current Frame Caption:</strong>
-                <div id="currentCaption">No caption available</div>
-            </div>
+            <video id="videoPreview" controls style="display: none;"></video>
             <div class="progress">
-                <div class="progress-bar" role="progressbar" style="width: 0%"></div>
+                <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar"></div>
             </div>
         </div>
 
-        <div class="row mt-4">
-            <div class="col-md-6">
-                <h3>Parameters</h3>
-                <div class="parameter-slider">
-                    <label>Temperature: <span id="tempValue">0.7</span></label>
-                    <input type="range" class="form-range" min="0.01" max="1.99" step="0.01" value="0.7" id="temperature">
-                </div>
-                <div class="parameter-slider">
-                    <label>Top P: <span id="topPValue">0.8</span></label>
-                    <input type="range" class="form-range" min="0" max="1" step="0.1" value="0.8" id="topP">
-                </div>
-                <div class="parameter-slider">
-                    <label>Top K: <span id="topKValue">100</span></label>
-                    <input type="range" class="form-range" min="0" max="1000" step="10" value="100" id="topK">
-                </div>
-                <div class="parameter-slider">
-                    <label>Max Tokens: <span id="maxTokensValue">512</span></label>
-                    <input type="range" class="form-range" min="1" max="4096" step="1" value="512" id="maxTokens">
-                </div>
+        <div class="analysis-container" id="initialAnalysis" style="display: none;">
+            <h4>Initial Analysis:</h4>
+            <div id="analysisText"></div>
+        </div>
+
+        <div class="chat-section" style="display: none;">
+            <h3>Ask Questions</h3>
+            <div id="chatMessages" class="chat-container"></div>
+            <div class="input-group">
+                <input type="text" id="questionInput" class="form-control" placeholder="Ask a question about the video...">
+                <button class="btn btn-primary" onclick="askQuestion()">Ask</button>
             </div>
-            <div class="col-md-6">
-                <h3>Chat</h3>
-                <div id="chatMessages" class="chat-container"></div>
-                <div class="input-group">
-                    <input type="text" id="questionInput" class="form-control" placeholder="Ask a question about the video...">
-                    <button class="btn btn-primary" onclick="askQuestion()">Ask</button>
-                </div>
+        </div>
+
+        <div class="loading">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
             </div>
+            <p>Processing video...</p>
         </div>
     </div>
 
     <script>
-        let videoProcessed = false;
-        let currentFrameIndex = 0;
-        let frameCaptions = [];
-
-        // Update parameter values
-        document.querySelectorAll('.form-range').forEach(range => {
-            range.addEventListener('input', function() {
-                document.getElementById(this.id + 'Value').textContent = this.value;
-            });
-        });
-
-        function updateCaption() {
-            const video = document.getElementById('videoPreview');
-            if (!video || !videoProcessed) return;
-
-            // Get total frames from server response
-            fetch('/get_frame/0')
-                .then(response => response.json())
-                .then(data => {
-                    const totalFrames = data.total_frames;
-                    
-                    // Calculate current frame index based on video time and total frames
-                    const fps = 1; // We're sampling at 1 frame per second
-                    currentFrameIndex = Math.min(
-                        Math.floor(video.currentTime * fps),
-                        totalFrames - 1
-                    );
-                    
-                    // Get frame data
-                    return fetch(`/get_frame/${currentFrameIndex}`);
-                })
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    if (data.error) {
-                        console.error('Error fetching caption:', data.error);
-                        document.getElementById('currentCaption').textContent = 'Error loading caption';
-                    } else if (data.caption) {
-                        document.getElementById('currentCaption').textContent = data.caption;
-                        // Store caption for chat context
-                        if (!frameCaptions[currentFrameIndex]) {
-                            frameCaptions[currentFrameIndex] = data.caption;
-                        }
-                    }
-                })
-                .catch(error => {
-                    console.error('Error fetching caption:', error);
-                    document.getElementById('currentCaption').textContent = 'Error loading caption';
-                });
-        }
-
-        // Video upload and preview
+        // Handle video upload
         document.getElementById('videoUpload').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (file) {
+                // Show video preview
                 const video = document.getElementById('videoPreview');
                 video.style.display = 'block';
                 video.src = URL.createObjectURL(file);
-                videoProcessed = false;
-                document.getElementById('currentCaption').textContent = 'Processing video...';
-                uploadVideo(file);
+
+                // Show loading
+                document.querySelector('.loading').style.display = 'block';
+                document.querySelector('.progress').style.display = 'flex';
+
+                // Upload and analyze video
+                const formData = new FormData();
+                formData.append('video', file);
+
+                fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                    // Show analysis
+                    document.getElementById('initialAnalysis').style.display = 'block';
+                    document.getElementById('analysisText').textContent = data.analysis;
+                    // Show chat section
+                    document.querySelector('.chat-section').style.display = 'block';
+                    // Add initial analysis to chat
+                    addMessage(data.analysis, false);
+                })
+                .catch(error => {
+                    alert('Error: ' + error.message);
+                })
+                .finally(() => {
+                    document.querySelector('.loading').style.display = 'none';
+                    document.querySelector('.progress').style.display = 'none';
+                });
             }
         });
 
-        function uploadVideo(file) {
-            const formData = new FormData();
-            formData.append('video', file);
-
-            const progress = document.querySelector('.progress');
-            const progressBar = progress.querySelector('.progress-bar');
-            progress.style.display = 'flex';
-
-            fetch('/upload', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.error) {
-                    addMessage('error', `Error: ${data.error}`);
-                } else {
-                    videoProcessed = true;
-                    addMessage('system', 'Video uploaded and processed successfully!');
-                    // Get first frame caption
-                    updateCaption();
-                }
-            })
-            .catch(error => {
-                addMessage('error', `Error: ${error.message}`);
-            })
-            .finally(() => {
-                progress.style.display = 'none';
-            });
-        }
-
-        function addMessage(type, text) {
+        // Handle chat
+        function addMessage(text, isUser) {
             const messagesDiv = document.getElementById('chatMessages');
             const messageDiv = document.createElement('div');
-            messageDiv.className = `alert ${type === 'user' ? 'alert-primary' : type === 'error' ? 'alert-danger' : 'alert-success'} mb-2`;
+            messageDiv.className = isUser ? 'user-message' : 'ai-message';
             messageDiv.textContent = text;
             messagesDiv.appendChild(messageDiv);
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
 
         function askQuestion() {
-            if (!videoProcessed) {
-                addMessage('error', 'Please wait for video processing to complete');
-                return;
-            }
-
-            const question = document.getElementById('questionInput').value.trim();
+            const input = document.getElementById('questionInput');
+            const question = input.value.trim();
+            
             if (!question) return;
 
-            addMessage('user', question);
-            document.getElementById('questionInput').value = '';
+            // Add user message
+            addMessage(question, true);
+            input.value = '';
 
-            const params = {
-                query: question,
-                current_frame: currentFrameIndex,
-                temperature: parseFloat(document.getElementById('temperature').value),
-                top_p: parseFloat(document.getElementById('topP').value),
-                top_k: parseInt(document.getElementById('topK').value),
-                max_tokens: parseInt(document.getElementById('maxTokens').value)
-            };
+            // Show loading
+            document.querySelector('.loading').style.display = 'block';
 
-            console.log('Sending chat request:', params);
+            // Send question
             fetch('/chat', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(params)
+                body: JSON.stringify({ query: question })
             })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                return response.json();
-            })
+            .then(response => response.json())
             .then(data => {
-                console.log('Got chat response:', data);
                 if (data.error) {
-                    addMessage('error', `Error: ${data.error}`);
-                } else {
-                    addMessage('system', data.response);
+                    throw new Error(data.error);
                 }
+                addMessage(data.response, false);
             })
             .catch(error => {
-                console.error('Error in chat:', error);
-                addMessage('error', `Error: ${error.message}`);
+                addMessage('Error: ' + error.message, false);
+            })
+            .finally(() => {
+                document.querySelector('.loading').style.display = 'none';
             });
         }
 
-        // Handle Enter key in question input
+        // Handle Enter key in chat input
         document.getElementById('questionInput').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 askQuestion();
