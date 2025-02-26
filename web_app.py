@@ -120,13 +120,13 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload_video():
-        if 'video' not in request.files:
+    if 'video' not in request.files:
         return jsonify({'error': 'No video file provided'}), 400
-            
-        video_file = request.files['video']
-        if video_file.filename == '':
-        return jsonify({'error': 'No video file selected'}), 400
     
+    video_file = request.files['video']
+    if video_file.filename == '':
+        return jsonify({'error': 'No video file selected'}), 400
+
     try:
         # Log upload attempt
         logger.info(f"Processing video upload: {video_file.filename}")
@@ -160,11 +160,11 @@ def upload_video():
             Format this as a structured coaching report."""
         )
         logger.info("Initial analysis completed successfully")
-            
-            return jsonify({
+        
+        return jsonify({
             'success': True,
             'analysis': initial_analysis
-            })
+        })
             
     except Exception as e:
         logger.error(f"Error processing video: {e}")
@@ -174,11 +174,11 @@ def upload_video():
 def chat():
     if not video_analyzer.current_video:
         return jsonify({'error': 'No video has been uploaded yet'}), 400
-            
-        data = request.get_json()
-        if not data or 'query' not in data:
-            return jsonify({'error': 'No query provided'}), 400
-            
+    
+    data = request.get_json()
+    if not data or 'query' not in data:
+        return jsonify({'error': 'No query provided'}), 400
+    
     try:
         logger.info(f"Processing chat query for video: {video_analyzer.current_video}")
         logger.info(f"Query: {data['query']}")
