@@ -22,32 +22,37 @@ class VideoAnalyzer:
         self.llama_cpp_path = os.path.expanduser("~/GSX-a1/llama.cpp")
         self.model_path = os.path.expanduser("~/GSX-a1/MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf")
         self.mmproj_path = os.path.expanduser("~/GSX-a1/MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf")
-        self.books_dir = os.path.expanduser("~/GSX-a1/GardeRAG/books")
+        self.books_dir = os.path.expanduser("~/GSX-a1/GardeRAG/knowledge_base/pdfs")
         self.current_video = None
-        self._verify_paths()
+        self._verify_critical_paths()  # Only verify critical paths
         self._load_fencing_knowledge()
 
-    def _verify_paths(self):
-        """Verify that all required paths exist"""
+    def _verify_critical_paths(self):
+        """Verify that critical paths exist (models and llama.cpp)"""
         if not os.path.exists(self.llama_cpp_path):
             raise RuntimeError(f"llama.cpp directory not found at {self.llama_cpp_path}")
         if not os.path.exists(self.model_path):
             raise RuntimeError(f"Model file not found at {self.model_path}")
         if not os.path.exists(self.mmproj_path):
             raise RuntimeError(f"MM project model not found at {self.mmproj_path}")
-        if not os.path.exists(self.books_dir):
-            raise RuntimeError(f"Fencing books directory not found at {self.books_dir}")
 
     def _load_fencing_knowledge(self):
-        """Load key concepts from fencing books"""
-        # Load from The Basics of Fencing.pdf as it's the smallest and most concise
-        basics_path = os.path.join(self.books_dir, "The Basics of Fencing.pdf")
+        """Load key concepts from fencing books or use default if not available"""
+        # Default context that will be used if books are not available
         self.fencing_context = """Key fencing concepts to consider:
         - Proper stance and footwork are fundamental
         - Balance and control in movement
         - Blade control and point control
         - Distance management and timing
         - Technical precision in execution"""
+
+        # Try to load from books if available, but don't fail if not
+        try:
+            if os.path.exists(self.books_dir):
+                logger.info(f"Found books directory at {self.books_dir}, but using default context for now")
+                # Future enhancement: Load and process books when available
+        except Exception as e:
+            logger.warning(f"Could not access books directory: {e}, using default context")
 
     def _enhance_prompt(self, query: str) -> str:
         """Enhance the prompt with fencing context"""
