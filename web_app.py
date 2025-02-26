@@ -22,8 +22,10 @@ class VideoAnalyzer:
         self.llama_cpp_path = os.path.expanduser("~/GSX-a1/llama.cpp")
         self.model_path = os.path.expanduser("~/GSX-a1/MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf")
         self.mmproj_path = os.path.expanduser("~/GSX-a1/MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf")
+        self.books_dir = os.path.expanduser("~/GSX-a1/GardeRAG/books")
         self.current_video = None
         self._verify_paths()
+        self._load_fencing_knowledge()
 
     def _verify_paths(self):
         """Verify that all required paths exist"""
@@ -33,45 +35,61 @@ class VideoAnalyzer:
             raise RuntimeError(f"Model file not found at {self.model_path}")
         if not os.path.exists(self.mmproj_path):
             raise RuntimeError(f"MM project model not found at {self.mmproj_path}")
+        if not os.path.exists(self.books_dir):
+            raise RuntimeError(f"Fencing books directory not found at {self.books_dir}")
+
+    def _load_fencing_knowledge(self):
+        """Load key concepts from fencing books"""
+        # Load from The Basics of Fencing.pdf as it's the smallest and most concise
+        basics_path = os.path.join(self.books_dir, "The Basics of Fencing.pdf")
+        self.fencing_context = """Key fencing concepts to consider:
+        - Proper stance and footwork are fundamental
+        - Balance and control in movement
+        - Blade control and point control
+        - Distance management and timing
+        - Technical precision in execution"""
 
     def _enhance_prompt(self, query: str) -> str:
         """Enhance the prompt with fencing context"""
-        system_context = """You are an expert fencing coach with deep knowledge of classical and modern fencing techniques. 
+        system_context = f"""You are an expert fencing coach with deep knowledge of classical and modern fencing techniques.
+        {self.fencing_context}
+        
         When analyzing video, focus on:
-        1. Precise technical execution
-        2. Body mechanics and positioning
-        3. Tactical decision-making
-        4. Areas for improvement
-        Keep your analysis clear, specific, and actionable."""
+        1. Technical execution and form
+        2. Movement efficiency and control
+        3. Areas for improvement
+        
+        Keep your analysis clear and specific."""
         
         return f"{system_context}\n\nAnalyze this video: {query}"
 
     def analyze_video(self, video_path, query):
-        """Analyze video using MiniCPM-V with optimized parameters"""
+        """Analyze video using MiniCPM-V with basic parameters"""
         try:
-            # Convert video path to absolute path relative to base directory
             abs_video_path = os.path.abspath(video_path)
             if not os.path.exists(abs_video_path):
                 raise RuntimeError(f"Video file not found at {abs_video_path}")
 
             logger.info(f"Analyzing video: {abs_video_path}")
             
-            # Enhanced prompt with fencing context
             enhanced_prompt = self._enhance_prompt(query)
             
-            # Basic parameters that are known to work
+            # Basic parameters from example usage
             cmd = [
                 "./llama-minicpmv-cli",
                 "-m", self.model_path,
                 "--mmproj", self.mmproj_path,
-                "--temp", "0.1",
+                "-c", "4096",
+                "--temp", "0.7",
+                "--top-p", "0.8",
+                "--top-k", "100",
+                "--repeat-penalty", "1.05",
                 "--video", abs_video_path,
                 "-p", enhanced_prompt
             ]
             
             logger.info(f"Running command: {' '.join(cmd)}")
             
-            # Run the command from the llama.cpp directory
             result = subprocess.run(
                 cmd,
                 cwd=self.llama_cpp_path,
@@ -80,7 +98,6 @@ class VideoAnalyzer:
                 check=True
             )
             
-            # Check if output is empty or contains error messages
             output = result.stdout.strip()
             if not output or "error" in output.lower():
                 raise RuntimeError(f"Failed to analyze video. Output: {output}")
@@ -103,11 +120,11 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload_video():
-    if 'video' not in request.files:
+        if 'video' not in request.files:
         return jsonify({'error': 'No video file provided'}), 400
-    
-    video_file = request.files['video']
-    if video_file.filename == '':
+            
+        video_file = request.files['video']
+        if video_file.filename == '':
         return jsonify({'error': 'No video file selected'}), 400
     
     try:
@@ -143,12 +160,12 @@ def upload_video():
             Format this as a structured coaching report."""
         )
         logger.info("Initial analysis completed successfully")
-        
-        return jsonify({
+            
+            return jsonify({
             'success': True,
             'analysis': initial_analysis
-        })
-        
+            })
+            
     except Exception as e:
         logger.error(f"Error processing video: {e}")
         return jsonify({'error': str(e)}), 500
@@ -157,11 +174,11 @@ def upload_video():
 def chat():
     if not video_analyzer.current_video:
         return jsonify({'error': 'No video has been uploaded yet'}), 400
-    
-    data = request.get_json()
-    if not data or 'query' not in data:
-        return jsonify({'error': 'No query provided'}), 400
-    
+            
+        data = request.get_json()
+        if not data or 'query' not in data:
+            return jsonify({'error': 'No query provided'}), 400
+            
     try:
         logger.info(f"Processing chat query for video: {video_analyzer.current_video}")
         logger.info(f"Query: {data['query']}")
@@ -174,7 +191,7 @@ def chat():
         
         logger.info("Chat response generated successfully")
         return jsonify({'response': response})
-        
+            
     except Exception as e:
         logger.error(f"Error processing chat query: {e}")
         return jsonify({'error': str(e)}), 500
