@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 from flask import Flask, request, jsonify, render_template, send_from_directory
 from werkzeug.utils import secure_filename
+from uuid import uuid4
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -137,7 +138,7 @@ def upload_video():
         logger.info(f"Processing video upload: {video_file.filename}")
         
         # Save the uploaded video
-        filename = secure_filename(video_file.filename)
+        filename = secure_filename(f"{uuid4()}-{video_file.filename}")
         video_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         video_file.save(video_path)
         
