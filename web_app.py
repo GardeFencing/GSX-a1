@@ -5,6 +5,7 @@ from pathlib import Path
 from flask import Flask, request, jsonify, render_template, send_from_directory
 from werkzeug.utils import secure_filename
 from uuid import uuid4
+import json
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -24,9 +25,10 @@ class VideoAnalyzer:
         self.model_path = os.path.expanduser("~/GSX-a1/llama.cpp/MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf")
         self.mmproj_path = os.path.expanduser("~/GSX-a1/llama.cpp/MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf")
         self.books_dir = os.path.expanduser("~/GSX-a1/GardeRAG/knowledge_base/pdfs")
-        self.current_video = None
+        self.current_video = {}
         self._verify_critical_paths()  # Only verify critical paths
         self._load_fencing_knowledge()
+        self.conversation_history = {}
 
     def _verify_critical_paths(self):
         """Verify that critical paths exist (models and llama.cpp)"""
@@ -105,7 +107,7 @@ class VideoAnalyzer:
             )
             
             output = result.stdout.strip()
-            if not output or "error" in output.lower():
+            if not output:
                 raise RuntimeError(f"Failed to analyze video. Output: {output}")
             
             return output
@@ -129,6 +131,10 @@ def upload_video():
     if 'video' not in request.files:
         return jsonify({'error': 'No video file provided'}), 400
     
+    session_id = request.headers.get('X-Session-ID')
+    if session_id is None or session_id == "null":
+        session_id = f"{uuid4()}"
+    
     video_file = request.files['video']
     if video_file.filename == '':
         return jsonify({'error': 'No video file selected'}), 400
@@ -138,15 +144,16 @@ def upload_video():
         logger.info(f"Processing video upload: {video_file.filename}")
         
         # Save the uploaded video
-        filename = secure_filename(f"{uuid4()}-{video_file.filename}")
+        filename = secure_filename(f"{session_id}-{video_file.filename}")
         video_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        video_file.save(video_path)
+        if not os.path.exists(video_path):
+            video_file.save(video_path)
         
         # Log successful save
         logger.info(f"Video saved to: {video_path}")
         
         # Store the current video path
-        video_analyzer.current_video = video_path
+        video_analyzer.current_video[session_id] = video_path
         
         # Verify file exists and is readable
         if not os.path.exists(video_path):
@@ -167,12 +174,14 @@ def upload_video():
         )
         logger.info("Initial analysis completed successfully")
         
-        if os.path.exists(video_path):
-            os.remove(video_path)
+        # if os.path.exists(video_path):
+        #     os.remove(video_path)
         
+        print("RESPONSE FOR:", session_id, video_analyzer.current_video, video_analyzer.conversation_history)
         return jsonify({
             'success': True,
-            'analysis': initial_analysis
+            'analysis': initial_analysis,
+            'session_id': session_id,
         })
             
     except Exception as e:
@@ -183,7 +192,8 @@ def upload_video():
 
 @app.route('/chat', methods=['POST'])
 def chat():
-    if not video_analyzer.current_video:
+    session_id = request.headers.get('X-Session-ID')
+    if not video_analyzer.current_video.get(session_id):
         return jsonify({'error': 'No video has been uploaded yet'}), 400
     
     data = request.get_json()
@@ -191,15 +201,35 @@ def chat():
         return jsonify({'error': 'No query provided'}), 400
     
     try:
-        logger.info(f"Processing chat query for video: {video_analyzer.current_video}")
+        logger.info(f"Processing chat query for video: {video_analyzer.current_video[session_id]}")
         logger.info(f"Query: {data['query']}")
+                
+        query = f"""
+        You are an expert fencing coach who is having a conversation with your fencer.
+        Formulate a response to them
+        
+        This is the conversation history: {json.dumps(video_analyzer.conversation_history.get(session_id, []))}
+        
+        Your fencer said: {data['query']}
+        """
         
         # The _enhance_prompt method will automatically add fencing context
         response = video_analyzer.analyze_video(
-            video_analyzer.current_video,
-            data['query']
+            video_analyzer.current_video[session_id],
+            query,
         )
         
+        # Initialize conversation history if it doesn't exist
+        if session_id not in video_analyzer.conversation_history:
+            video_analyzer.conversation_history[session_id] = []
+
+        # Always append to the conversation history
+        video_analyzer.conversation_history[session_id].append({
+            "Fencer Question": data['query'], 
+            "Coach Answer": response,
+        })
+        
+        print("RESPONSE FOR:", session_id, video_analyzer.current_video, video_analyzer.conversation_history)
         logger.info("Chat response generated successfully")
         return jsonify({'response': response})
             
