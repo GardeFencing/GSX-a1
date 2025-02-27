@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import subprocess
+import time
 from functools import lru_cache
 from uuid import uuid4
 
@@ -102,16 +103,22 @@ class VideoAnalyzer:
         return f"{system_context}\n\nAnalyze this video: {query}"
 
     @lru_cache(maxsize=128)
-    def _run_inference(self, cmd: tuple, cwd: str) -> str:
+    def _run_inference(self, cmd: tuple) -> str:
         """
         Run the inference subprocess. We store `cmd` as a tuple so lru_cache
         can hash it. Alternatively, you could store results in a manual dict.
         """
         logger.info(f"Running command (cached): {' '.join(cmd)}")
         result = subprocess.run(
-            cmd, cwd=cwd, capture_output=True, text=True, check=True
+            cmd, cwd=self.llama_cpp_path, capture_output=True, text=False, check=True
         )
-        return result.stdout.strip()
+
+        stdout = result.stdout.decode("utf-8", errors="replace")
+        stderr = result.stderr.decode("utf-8", errors="replace")
+
+        logging.warning(f"STDERR: {stderr}")
+
+        return stdout.strip()
 
     def analyze_video(self, video_path, query):
         """Analyze the video using llama-minicpmv-cli with slightly reduced context size."""
@@ -150,7 +157,7 @@ class VideoAnalyzer:
             logger.debug(f"Full command: {' '.join(cmd)}")
 
             # 9) Run or Retrieve from Cache
-            output = self._run_inference(cmd, cwd=self.llama_cpp_path)
+            output = self._run_inference(cmd)
 
             if not output:
                 raise RuntimeError("Failed to analyze video. Output is empty.")
@@ -176,6 +183,8 @@ def index():
 
 @app.route("/upload", methods=["POST"])
 def upload_video():
+    start_time = time.time()
+
     if "video" not in request.files:
         return jsonify({"error": "No video file provided"}), 400
 
@@ -225,6 +234,8 @@ def upload_video():
             f"Initial analysis completed successfully. Length: {len(initial_analysis)}"
         )
 
+        logger.info(f"Request took {time.time() - start_time}")
+
         return jsonify(
             {
                 "success": True,
@@ -238,11 +249,16 @@ def upload_video():
         if os.path.exists(video_path):
             os.remove(video_path)
         logger.exception(f"Error processing video: {e}")
+
+        logger.info(f"Request took {time.time() - start_time}")
+
         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/chat", methods=["POST"])
 def chat():
+    start_time = time.time()
+
     session_id = request.headers.get("X-Session-ID")
     if not video_analyzer.current_video.get(session_id):
         return jsonify({"error": "No video has been uploaded yet"}), 400
@@ -283,10 +299,15 @@ def chat():
             }
         )
 
+        logger.info(f"Request took {time.time() - start_time}")
+
         return jsonify({"response": response})
 
     except Exception as e:
         logger.exception(f"Error processing chat query: {e}")
+
+        logger.info(f"Request took {time.time() - start_time}")
+
         return jsonify({"error": str(e)}), 500
 
 
