@@ -52,7 +52,7 @@
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential cmake pkg-config python3.10-dev python3.10-venv
+sudo apt-get install -y build-essential cmake pkg-config python3.10-dev python3.10-venv ffmpeg
 ```
 
 ---
