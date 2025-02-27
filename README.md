@@ -51,8 +51,15 @@
 - Install system deps
 
   ```bash
-  sudo apt-get update
-  sudo apt-get install -y build-essential cmake pkg-config python3.10-dev python3.10-venv ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev ccache
+  sudo apt update
+  sudo apt install -y build-essential cmake pkg-config python3.10-dev python3.10-venv ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev ccache redis-server
+  ```
+
+- Start redis cache (optional)
+
+  ```bash
+  sudo systemctl enable redis-server
+  sudo systemctl start redis-server
   ```
 
 ---
