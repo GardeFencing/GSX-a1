@@ -139,7 +139,7 @@ class VideoAnalyzer:
                 "--mmproj",
                 self.mmproj_path,
                 "-c",
-                "2048",
+                "4096",
                 "--temp",
                 "0.7",
                 "--top-p",
@@ -154,7 +154,7 @@ class VideoAnalyzer:
                 enhanced_prompt,
             )
 
-            logger.debug(f"Full command: {' '.join(cmd)}")
+            logger.info(f"Full command: {' '.join(cmd)}")
 
             # 9) Run or Retrieve from Cache
             output = self._run_inference(cmd)
