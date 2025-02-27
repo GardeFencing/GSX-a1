@@ -1,4 +1,4 @@
-#!/Users/rdas/Projects/VidCLIPChatbot/venv_py310/bin/python3.10
+#!/home/ubuntu/GSX-a1/venv_py310/bin/python3.10
 # -*- coding: utf-8 -*-
 import re
 import sys
