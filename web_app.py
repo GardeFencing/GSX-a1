@@ -20,8 +20,8 @@ class VideoAnalyzer:
     def __init__(self):
         self.base_dir = os.path.abspath(os.getcwd())
         self.llama_cpp_path = os.path.expanduser("~/GSX-a1/llama.cpp")
-        self.model_path = os.path.expanduser("~/GSX-a1/MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf")
-        self.mmproj_path = os.path.expanduser("~/GSX-a1/MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf")
+        self.model_path = os.path.expanduser("~/GSX-a1/llama.cpp/MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf")
+        self.mmproj_path = os.path.expanduser("~/GSX-a1/llama.cpp/MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf")
         self.books_dir = os.path.expanduser("~/GSX-a1/GardeRAG/knowledge_base/pdfs")
         self.current_video = None
         self._verify_critical_paths()  # Only verify critical paths
@@ -166,12 +166,17 @@ def upload_video():
         )
         logger.info("Initial analysis completed successfully")
         
+        if os.path.exists(video_path):
+            os.remove(video_path)
+        
         return jsonify({
             'success': True,
             'analysis': initial_analysis
         })
             
     except Exception as e:
+        if os.path.exists(video_path):
+            os.remove(video_path)
         logger.error(f"Error processing video: {e}")
         return jsonify({'error': str(e)}), 500
 
