@@ -131,7 +131,7 @@ cd llama.cpp
   --top-p 0.8 \
   --top-k 100 \
   --repeat-penalty 1.05 \
-  --video ../fencing_video.mp4 \
+  --video ../fencing_trimmed.mp4 \
   -p "What is happening in this video?"
 ```
 
