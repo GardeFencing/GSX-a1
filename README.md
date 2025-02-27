@@ -75,7 +75,7 @@ cd GSX-a1
 ```bash
 git clone -b support-video-understanding https://github.com/OpenBMB/llama.cpp.git
 cd llama.cpp
-make
+make LLAMA_FFMPEG=1
 ```
 
 ---
