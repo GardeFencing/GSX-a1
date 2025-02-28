@@ -5,29 +5,38 @@ import logging
 import os
 import subprocess
 import time
-from functools import lru_cache
 from uuid import uuid4
 
 import redis
 from flask import Flask, jsonify, render_template, request
-from werkzeug.utils import secure_filename
+from multiprocessing import Lock
+
+lock = Lock()
 
 # Configure the root logger to DEBUG (or INFO if you want fewer logs)
 logging.basicConfig(level=logging.DEBUG)
 
 app = Flask(__name__)
 
-gunicorn_logger = logging.getLogger("gunicorn.error")
-app.logger.handlers = gunicorn_logger.handlers
-app.logger.setLevel(logging.DEBUG)
-
-formatter = logging.Formatter(
-    "%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d - %(message)s"
-)
-for handler in gunicorn_logger.handlers:
-    handler.setFormatter(formatter)
+if "gunicorn" in os.environ.get("SERVER_SOFTWARE", ""):
+    # Running under Gunicorn
+    gunicorn_logger = logging.getLogger("gunicorn.error")
+    app.logger.handlers = gunicorn_logger.handlers
+    app.logger.setLevel(logging.DEBUG)
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d - %(message)s"
+    )
+    for handler in gunicorn_logger.handlers:
+        handler.setFormatter(formatter)
+else:
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d - %(message)s",
+    )
+    app.logger = logging.getLogger(__name__)
 
 logger = app.logger
+logger.info("Logging setup complete!")
 
 app.config["UPLOAD_FOLDER"] = "uploads"
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100 MB max file size
@@ -45,11 +54,11 @@ except redis.exceptions.ConnectionError:
     redis_success = False
 
 
-def file_hash(video_path):
+def file_hash(file_obj):
     hasher = hashlib.sha256()
-    with open(video_path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            hasher.update(chunk)
+    for chunk in iter(lambda: file_obj.read(4096), b""):
+        hasher.update(chunk)
+    file_obj.seek(0)
     return hasher.hexdigest()
 
 
@@ -77,7 +86,7 @@ def make_cache_key(args: list[str]):
 
 
 class VideoAnalyzer:
-    def __init__(self, curr_video, conv_hist):
+    def __init__(self, conv_hist):
         # Paths to llama.cpp, model, etc.
         self.base_dir = os.path.abspath(os.getcwd())
         self.llama_cpp_path = os.path.expanduser("~/GSX-a1/llama.cpp")
@@ -90,7 +99,6 @@ class VideoAnalyzer:
         self.books_dir = os.path.expanduser("~/GSX-a1/GardeRAG/knowledge_base/pdfs")
 
         # Keep track of current videos and chat histories
-        self.current_video = curr_video
         self.conversation_history = conv_hist
 
         self._verify_critical_paths()
@@ -147,13 +155,12 @@ class VideoAnalyzer:
 
         return f"{system_context}\n\nAnalyze this video: {query.lower().strip()}"
 
-    @lru_cache(maxsize=128)
     def _run_inference(self, cmd: tuple) -> str:
         """
         Run the inference subprocess. We store `cmd` as a tuple so lru_cache
         can hash it. Alternatively, you could store results in a manual dict.
         """
-        logger.info(f"Running command (cached): {' '.join(cmd)}")
+        logger.info(f"Running command: {' '.join(cmd)}")
         result = subprocess.run(
             cmd, cwd=self.llama_cpp_path, capture_output=True, text=False, check=True
         )
@@ -165,7 +172,7 @@ class VideoAnalyzer:
 
         return stdout.strip()
 
-    def analyze_video(self, video_path, query, raw_query):
+    def analyze_video(self, video_path, query, enhance=True):
         """Analyze the video using llama-minicpmv-cli with slightly reduced context size."""
         try:
             abs_video_path = os.path.abspath(video_path)
@@ -174,7 +181,10 @@ class VideoAnalyzer:
 
             logger.info(f"Analyzing video: {abs_video_path}")
 
-            enhanced_prompt = self._enhance_prompt(query)
+            if enhance:
+                enhanced_prompt = self._enhance_prompt(query)
+            else:
+                enhanced_prompt = query
 
             # Do not lower context length (-c), will bug out
             cmd = (
@@ -199,8 +209,6 @@ class VideoAnalyzer:
                 enhanced_prompt,
             )
 
-            logger.info(f"Full command: {' '.join(cmd)}")
-
             # 9) Run or Retrieve from Cache
             output = self._run_inference(cmd)
 
@@ -217,31 +225,40 @@ class VideoAnalyzer:
             logger.exception(f"Unexpected error during video analysis: {e}")
             raise
 
-
 def save_context():
-    all_context = {
-        "curr_vid": video_analyzer.current_video,
-        "conv_hist": video_analyzer.conversation_history,
-    }
-    all_context = json.dumps(all_context)
+    all_context = json.dumps(video_analyzer.conversation_history)
+    logger.info(f"Saving context, {all_context}")
     with open("save_context.json", "w") as file:
         file.write(all_context)
 
+def save_context():
+    # 1. Check for Flask's main process
+    is_flask_main = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+    # 2. Check for Gunicorn's primary worker process
+    is_primary_gunicorn = os.getpid() == 1
+
+    # 3. Only save if it's the main Flask process or the primary Gunicorn worker
+    if is_flask_main or is_primary_gunicorn:
+        with lock:  # Prevent race conditions
+            all_context = json.dumps(video_analyzer.conversation_history)
+            logger.info(f"Saving context, {all_context}")
+            with open("save_context.json", "w") as file:
+                file.write(all_context)
 
 def rehydrate_state():
     try:
         with open("save_context.json", "r") as file:
             content = json.loads(file.read())
-            current_video = content.get("curr_video", {})
-            conversation_history = content.get("conv_hist", {})
     except (FileNotFoundError, json.JSONDecodeError):
-        current_video, conversation_history = {}, {}
+        content = {}
 
-    return current_video, conversation_history
+    logger.info(f"Rehydrating state, {content}")
+    
+    return content
 
-
+convo_history = rehydrate_state()
+video_analyzer = VideoAnalyzer(convo_history)
 atexit.register(save_context)
-
 
 @app.route("/")
 def index():
@@ -253,24 +270,27 @@ def upload_video():
     start_time = time.time()
 
     if "video" not in request.files:
-        return jsonify({"error": "No video file provided"}), 400
+        return jsonify({"error": "No video file provided", "success": False}), 400
 
     session_id = request.headers.get("X-Session-ID")
     if session_id is None or session_id == "null":
         session_id = str(uuid4())
+        
+    logger.info(f"SESSION ID, {session_id}")
 
     video_file = request.files["video"]
     if video_file.filename == "":
         logger.error("No file selected")
-        return jsonify({"error": "No video file selected"}), 400
+        return jsonify({"error": "No video file selected", "success": False}), 400
 
     try:
         # Log upload attempt
         logger.info(f"Processing video upload: {video_file.filename}")
 
         # Save the uploaded video
-        filename = secure_filename(f"{session_id}-{video_file.filename}")
-        video_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+        hash_file = file_hash(video_file)
+        
+        video_path = os.path.join(app.config["UPLOAD_FOLDER"], hash_file)
         if not os.path.exists(video_path):
             video_file.save(video_path)
 
@@ -279,17 +299,8 @@ def upload_video():
         Keep it conversational, like you're watching them in person.
         Format this as a structured coaching report."""
 
-        hash_file = file_hash(video_path)
-        cache_key = make_cache_key([hash_file, default_query])
-        cached_results = get_cached_results(cache_key)
-        if cached_results is not None:
-            return jsonify(cached_results)
-
         # Log successful save
         logger.info(f"Video saved to: {video_path}")
-
-        # Store the current video path
-        video_analyzer.current_video[session_id] = video_path
 
         # Verify file exists
         if not os.path.exists(video_path):
@@ -298,6 +309,18 @@ def upload_video():
         # File size
         file_size = os.path.getsize(video_path)
         logger.info(f"Video file size: {file_size} bytes")
+        
+        cache_key = make_cache_key([hash_file, default_query])
+        cached_results = get_cached_results(cache_key)
+        if cached_results is not None:
+            cached_results["session_id"] = session_id
+            
+            logger.info(f"Using cached results, {cached_results}")
+            
+            logger.info(f"Request took {time.time() - start_time}")
+            logger.info(f"Convo history, {video_analyzer.conversation_history}")
+            
+            return jsonify(cached_results)
 
         # Initial analysis
         logger.info("Starting initial video analysis...")
@@ -315,9 +338,12 @@ def upload_video():
             "success": True,
             "analysis": initial_analysis,
             "session_id": session_id,
+            "hash_file": hash_file,
         }
 
         cache_results(cache_key, response)
+        
+        logger.info(f"Convo history, {video_analyzer.conversation_history}")
 
         return jsonify(response)
 
@@ -329,7 +355,14 @@ def upload_video():
 
         logger.info(f"Request took {time.time() - start_time}")
 
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "success": False}), 500
+
+def format_conversation_history(conversation_history):
+    formatted_history = ""
+    for exchange in conversation_history:
+        formatted_history += f"Fencer: {exchange['Fencer Question']}\n"
+        formatted_history += f"Coach: {exchange['Coach Answer']}\n\n"
+    return formatted_history.strip()
 
 
 @app.route("/chat", methods=["POST"])
@@ -337,22 +370,39 @@ def chat():
     start_time = time.time()
 
     session_id = request.headers.get("X-Session-ID")
-    if not video_analyzer.current_video.get(session_id):
-        return jsonify({"error": "No video has been uploaded yet"}), 400
+    hash_file = request.headers.get("X-hash-file")
+    video_path = os.path.join(app.config["UPLOAD_FOLDER"], hash_file)
+    if not os.path.exists(video_path):
+        return jsonify({"error": "No video has been uploaded yet", "success": False}), 400
 
     data = request.get_json()
     if not data or "query" not in data:
-        return jsonify({"error": "No query provided"}), 400
+        return jsonify({"error": "No query provided", "success": False}), 400
+    
+    if session_id not in video_analyzer.conversation_history:
+        video_analyzer.conversation_history[session_id] = []
 
-    hash_file = file_hash(video_analyzer.current_video[session_id])
     cache_key = make_cache_key([hash_file, data["query"].lower().strip()])
     cached_results = get_cached_results(cache_key)
     if cached_results is not None:
+        cached_results["session_id"] = session_id
+        
+        logger.info(f"Using cached results, {cached_results}")
+        
+        hist = {
+            "Fencer Question": data["query"].lower().strip(),
+            "Coach Answer": cached_results["analysis"],
+        }
+        if hist not in video_analyzer.conversation_history[session_id]:
+            video_analyzer.conversation_history[session_id].append(hist)
+
+        logger.info(f"Request took {time.time() - start_time}")
+        logger.info(f"Convo history, {video_analyzer.conversation_history}")
         return jsonify(cached_results)
 
     try:
         logger.info(
-            f"Processing chat query for video: {video_analyzer.current_video[session_id]}, query: {data['query']}"
+            f"Processing chat query for video: {hash_file}, query: {data['query']}"
         )
 
         # Incorporate conversation history
@@ -360,34 +410,33 @@ def chat():
         query_content = f"""
         You are an expert fencing coach having a conversation with your fencer.
 
-        Conversation so far: {json.dumps(conversation_history)}
+        Conversation so far: 
+        {format_conversation_history(conversation_history)}
 
         The fencer says: {data['query']}
         """
 
         response = video_analyzer.analyze_video(
-            video_analyzer.current_video[session_id],
+            video_path,
             query_content,
-            data["query"],
+            enhance=False,
         )
         logger.info(f"Completed chat response. Length: {len(response)}")
 
-        # Update conversation history
-        if session_id not in video_analyzer.conversation_history:
-            video_analyzer.conversation_history[session_id] = []
-
-        video_analyzer.conversation_history[session_id].append(
-            {
-                "Fencer Question": data["query"],
-                "Coach Answer": response,
-            }
-        )
+        hist =  {
+            "Fencer Question": data["query"].lower().strip(),
+            "Coach Answer": response,
+        }
+        if hist not in video_analyzer.conversation_history[session_id]:
+            video_analyzer.conversation_history[session_id].append(hist)
 
         logger.info(f"Request took {time.time() - start_time}")
 
-        response = {"response": response}
+        response = {"analysis": response, "success": True}
 
         cache_results(cache_key, response)
+        
+        logger.info(f"Convo history, {video_analyzer.conversation_history}")
 
         return jsonify(response)
 
@@ -396,10 +445,8 @@ def chat():
 
         logger.info(f"Request took {time.time() - start_time}")
 
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "success": False}), 500
 
 
 if __name__ == "__main__":
-    curr_vid, conv_hist = rehydrate_state()
-    video_analyzer = VideoAnalyzer(curr_vid, conv_hist)
     app.run(host="0.0.0.0", port=5000, debug=True)
