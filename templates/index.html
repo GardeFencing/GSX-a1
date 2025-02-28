@@ -123,6 +123,7 @@
     <script>
         // Handle video upload
         let session_id = null;
+        let hash_file = null;
         document.getElementById('videoUpload').addEventListener('change', function (e) {
             const file = e.target.files[0];
             if (file) {
@@ -141,9 +142,6 @@
 
                 fetch('/upload', {
                     method: 'POST',
-                    headers: {
-                        'X-Session-ID': session_id
-                    },
                     body: formData
                 })
                     .then(response => response.json())
@@ -159,6 +157,7 @@
                         // Add initial analysis to chat
                         addMessage(data.analysis, false);
                         session_id = data.session_id;
+                        hash_file = data.hash_file;
                     })
                     .catch(error => {
                         alert('Error: ' + error.message);
@@ -198,7 +197,8 @@
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-Session-ID': session_id
+                    'X-Session-ID': session_id,
+                    'X-hash-file': hash_file,
                 },
                 body: JSON.stringify({ query: question })
             })
@@ -207,7 +207,7 @@
                     if (data.error) {
                         throw new Error(data.error);
                     }
-                    addMessage(data.response, false);
+                    addMessage(data.analysis, false);
                 })
                 .catch(error => {
                     addMessage('Error: ' + error.message, false);

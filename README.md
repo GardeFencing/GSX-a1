@@ -50,10 +50,17 @@
 
 - Install system deps
 
-```bash
-sudo apt-get update
-sudo apt-get install -y build-essential cmake pkg-config python3.10-dev python3.10-venv ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev ccache
-```
+  ```bash
+  sudo apt update
+  sudo apt install -y build-essential cmake pkg-config python3.10-dev python3.10-venv ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev ccache redis-server
+  ```
+
+- Start redis cache (optional)
+
+  ```bash
+  sudo systemctl enable redis-server
+  sudo systemctl start redis-server
+  ```
 
 ---
 
@@ -61,10 +68,10 @@ sudo apt-get install -y build-essential cmake pkg-config python3.10-dev python3.
 
 - Clone GSX-a1 repo
 
-```bash
-git clone -b vidiQA_EC2_Branch https://github.com/GardeFencing/GSX-a1.git
-cd GSX-a1
-```
+  ```bash
+  git clone -b vidiQA_EC2_Branch https://github.com/GardeFencing/GSX-a1.git
+  cd GSX-a1
+  ```
 
 ---
 
@@ -72,11 +79,11 @@ cd GSX-a1
 
 - Clone llama.cpp repo with video understanding
 
-```bash
-git clone -b support-video-understanding https://github.com/OpenBMB/llama.cpp.git
-cd llama.cpp
-make LLAMA_FFMPEG=1
-```
+  ```bash
+  git clone -b support-video-understanding https://github.com/OpenBMB/llama.cpp.git
+  cd llama.cpp
+  make LLAMA_FFMPEG=1
+  ```
 
 ---
 
@@ -84,11 +91,11 @@ make LLAMA_FFMPEG=1
 
 - Install quantized model
 
-```bash
-mkdir -p MiniCPM-V-2_6-gguf
-wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/ggml-model-Q4_K_M.gguf -O MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf
-wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/mmproj-model-f16.gguf -O MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf
-```
+  ```bash
+  mkdir -p MiniCPM-V-2_6-gguf
+  wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/ggml-model-Q4_K_M.gguf -O MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf
+  wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/mmproj-model-f16.gguf -O MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf
+  ```
 
 ---
 
@@ -96,22 +103,42 @@ wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/mmproj-model
 
 - Install python deps (server)
 
-```bash
-cd ..
-python3.10 -m venv venv_py310
-source venv_py310/bin/activate
-pip install -r requirements.txt
-```
+  ```bash
+  cd ..
+  python3.10 -m venv venv_py310
+  source venv_py310/bin/activate
+  pip install -r requirements.txt
+  ```
 
 ---
 
 ### 6. Run the Server
 
-- Run the server
+- Run the dev server
 
-```bash
-python server.py
-```
+  ```bash
+  python server.py
+  ```
+
+- Run the prod server
+
+  ```bash
+  gunicorn web_app:app \
+      --workers 2 \
+      --threads 4 \
+      --worker-class=gthread \
+      --bind 0.0.0.0:5000 \
+      --timeout 3600 \
+      --graceful-timeout 300 \
+      --keep-alive 120 \
+      --max-requests 1000 \
+      --max-requests-jitter 50 \
+      --log-level debug \
+      --capture-output \
+      --enable-stdio-inheritance \
+      --access-logfile /var/log/supervisor/vidclip_access.log \
+      --error-logfile /var/log/supervisor/vidclip_error.log web_app:app
+  ```
 
 ---
 
@@ -121,20 +148,20 @@ python server.py
 
 - Test command
 
-```bash
-cd llama.cpp
-./llama-minicpmv-cli \
-  -m ./MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf \
-  --mmproj ./MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf \
-  -c 8192 \
-  --temp 0.7 \
-  --top-p 0.8 \
-  --top-k 100 \
-  --repeat-penalty 1.05 \
-  --video ../fencing_trimmed.mp4 \
-  -p "What is happening in this video?"
-```
-
+  ```bash
+  cd llama.cpp
+  ./llama-minicpmv-cli \
+    -m ./MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf \
+    --mmproj ./MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf \
+    -c 8192 \
+    --temp 0.7 \
+    --top-p 0.8 \
+    --top-k 100 \
+    --repeat-penalty 1.05 \
+    --video ../fencing_trimmed.mp4 \
+    -p "What is happening in this video?"
+  ```
+  
 ---
 
 ### 2. Test Web Interface
