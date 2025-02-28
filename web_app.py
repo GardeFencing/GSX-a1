@@ -258,6 +258,9 @@ atexit.register(save_context)
 def index():
     return render_template("index.html")
 
+@app.route("/health")
+def health():
+    return jsonify({"success": True})
 
 @app.route("/upload", methods=["POST"])
 def upload_video():

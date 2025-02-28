@@ -12,3 +12,4 @@ sudo sed "s|__GSX_A1_PATH__|$GSX_A1_PATH|g" vidclip.conf > /etc/supervisor/conf.
 sudo supervisorctl reread
 sudo supervisorctl update
 sudo supervisorctl restart vidclip
+sudo supervisorctl status vidclip

@@ -125,7 +125,7 @@
 - Run the prod server
 
   ```bash
-  export GSX_A1_PATH=<absolute-path-to-your-GSX-a1-dir>
+  export GSX_A1_PATH=$(pwd)
   sudo -E ./supervisor_setup.sh
   ```
 
