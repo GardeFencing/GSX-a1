@@ -89,24 +89,18 @@ class VideoAnalyzer:
     def __init__(self, conv_hist):
         # Paths to llama.cpp, model, etc.
         self.base_dir = os.path.abspath(os.getcwd())
-        self.llama_cpp_path = os.path.expanduser("~/GSX-a1/llama.cpp")
-        self.model_path = os.path.expanduser(
-            "~/GSX-a1/llama.cpp/MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf"
-        )
-        self.mmproj_path = os.path.expanduser(
-            "~/GSX-a1/llama.cpp/MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf"
-        )
-        self.books_dir = os.path.expanduser("~/GSX-a1/GardeRAG/knowledge_base/pdfs")
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+
+        self.llama_cpp_path = os.path.join(script_dir, "llama.cpp")
+        self.model_path = os.path.join(script_dir, "llama.cpp", "MiniCPM-V-2_6-gguf", "ggml-model-Q4_K_M.gguf")
+        self.mmproj_path = os.path.join(script_dir, "llama.cpp", "MiniCPM-V-2_6-gguf", "mmproj-model-f16.gguf")
+        self.books_dir = os.path.join(script_dir, "GardeRAG", "knowledge_base", "pdfs")
 
         # Keep track of current videos and chat histories
         self.conversation_history = conv_hist
 
         self._verify_critical_paths()
         self._load_fencing_knowledge()
-
-        self.pipe_path = os.path.join(self.base_dir, "llama_input.pipe")
-        self.process = None
-        self.is_initialized = False
 
     def _verify_critical_paths(self):
         """Verify that critical paths exist (models and llama.cpp)"""

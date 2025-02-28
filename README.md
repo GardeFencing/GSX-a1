@@ -52,7 +52,7 @@
 
   ```bash
   sudo apt update
-  sudo apt install -y build-essential cmake pkg-config python3.10-dev python3.10-venv ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev ccache redis-server
+  sudo apt install -y build-essential cmake pkg-config python3.10-dev python3.10-venv ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev ccache redis-server supervisor
   ```
 
 - Start redis cache (optional)
@@ -60,6 +60,8 @@
   ```bash
   sudo systemctl enable redis-server
   sudo systemctl start redis-server
+  sudo systemctl enable supervisor
+  sudo systemctl start supervisor
   ```
 
 ---
@@ -123,21 +125,14 @@
 - Run the prod server
 
   ```bash
-  gunicorn web_app:app \
-      --workers 2 \
-      --threads 4 \
-      --worker-class=gthread \
-      --bind 0.0.0.0:5000 \
-      --timeout 3600 \
-      --graceful-timeout 300 \
-      --keep-alive 120 \
-      --max-requests 1000 \
-      --max-requests-jitter 50 \
-      --log-level debug \
-      --capture-output \
-      --enable-stdio-inheritance \
-      --access-logfile /var/log/supervisor/vidclip_access.log \
-      --error-logfile /var/log/supervisor/vidclip_error.log web_app:app
+  export GSX_A1_PATH=<absolute-path-to-your-GSX-a1-dir>
+  sudo -E ./supervisor_setup.sh
+  ```
+
+- Stop the prod server
+
+  ```bash
+  sudo supervisorctl shutdown
   ```
 
 ---
