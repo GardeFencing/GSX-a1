@@ -4,6 +4,8 @@
 venv*/
 uploads/
 save_context.json
+MiniCPM-*-2_6-gguf/
+benchmark_*.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
