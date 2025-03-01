@@ -20,13 +20,12 @@ app = Flask(__name__)
 
 if "gunicorn" in os.environ.get("SERVER_SOFTWARE", ""):
     # Running under Gunicorn
-    gunicorn_logger = logging.getLogger("gunicorn.error")
-    app.logger.handlers = gunicorn_logger.handlers
+    app.logger = logging.getLogger("gunicorn.error")
     app.logger.setLevel(logging.DEBUG)
     formatter = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d - %(message)s"
     )
-    for handler in gunicorn_logger.handlers:
+    for handler in app.logger.handlers:
         handler.setFormatter(formatter)
 else:
     logging.basicConfig(
@@ -50,7 +49,7 @@ try:
     redis_client.ping()
     redis_success = True
 except redis.exceptions.ConnectionError:
-    gunicorn_logger.exception("Failed to connect to redis")
+    logger.exception("Failed to connect to redis")
     redis_success = False
 
 
