@@ -112,7 +112,20 @@ Reference the MiniCPM Docs: [MiniCPM Docs](https://modelbest.feishu.cn/wiki/C2BW
 
 ### 4. Download MiniCPM-V Models
 
+- If sufficient memory requirements, install full model (f16)
+
+  - High performance
+
+  ```bash
+  cd ..
+  mkdir -p MiniCPM-V-2_6-gguf
+  wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/ggml-model-f16.gguf -O MiniCPM-V-2_6-gguf/ggml-model-f16.gguf
+  wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/mmproj-model-f16.gguf -O MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf
+  ```
+
 - Install quantized model (Q4)
+
+  - Medium performance
 
   ```bash
   cd ..
@@ -122,6 +135,8 @@ Reference the MiniCPM Docs: [MiniCPM Docs](https://modelbest.feishu.cn/wiki/C2BW
   ```
 
 - If low memory, install more quantized model (Q2)
+
+  - Low performance
 
   ```bash
   cd ..
@@ -181,6 +196,22 @@ Reference the MiniCPM Docs: [MiniCPM Docs](https://modelbest.feishu.cn/wiki/C2BW
 ## Testing the Setup
 
 ### 1. Test llama.cpp Installation
+
+- Test command (f16)
+
+  ```bash
+  cd llama.cpp
+  ./llama-minicpmv-cli \
+    -m ../MiniCPM-V-2_6-gguf/ggml-model-f16.gguf \
+    --mmproj ../MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf \
+    -c 4096 \
+    --temp 0.7 \
+    --top-p 0.8 \
+    --top-k 100 \
+    --repeat-penalty 1.05 \
+    --video ../fencing_trimmed.mp4 \
+    -p "What is happening in this video?"
+  ```
 
 - Test command (Q4)
 
@@ -276,3 +307,12 @@ Run #1: 3m18.254s
 Run #2: 3m4.463s
 Run #3: 3m15.103s
 Average Real Time for Q4_K_M: 192.60 seconds
+
+f16 V model
+
+3m49.229s
+
+Hypothesis:
+
+Without GPU, lower limit for inference is 3 minutes, so if you have >= 15gb of RAM, you can run the unquantized model and achieve < 4 minute inference time. 
+If you have < 15gb of RAM, inference time will drastically increase for models with less quantization. Overall, on CPU (or at least build with llama.cpp) you cannot achieve inference time < 3 minutes.
