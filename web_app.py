@@ -92,10 +92,10 @@ class VideoAnalyzer:
 
         self.llama_cpp_path = os.path.join(script_dir, "llama.cpp")
         self.model_path = os.path.join(
-            script_dir, "llama.cpp", "MiniCPM-V-2_6-gguf", "ggml-model-Q4_K_M.gguf"
+            script_dir, "MiniCPM-V-2_6-gguf", "ggml-model-Q4_K_M.gguf"
         )
         self.mmproj_path = os.path.join(
-            script_dir, "llama.cpp", "MiniCPM-V-2_6-gguf", "mmproj-model-f16.gguf"
+            script_dir, "MiniCPM-V-2_6-gguf", "mmproj-model-f16.gguf"
         )
         self.books_dir = os.path.join(script_dir, "GardeRAG", "knowledge_base", "pdfs")
 
