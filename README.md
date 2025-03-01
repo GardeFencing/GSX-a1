@@ -72,7 +72,7 @@ Reference the MiniCPM Docs: [MiniCPM Docs](https://modelbest.feishu.cn/wiki/C2BW
   - ggml-model-Q2_K.gguf
 
 ```bash
-export MODEL=<YOUR-MODEL>
+export $MODEL=<>
 echo "MODEL=$MODEL" > .env
 ```
 
@@ -133,6 +133,8 @@ echo "MODEL=$MODEL" > .env
 
 ### 3. Download MiniCPM-V Models
 
+MODELS: 
+
   ```bash
   cd ..
   mkdir -p MiniCPM-V-2_6-gguf
@@ -149,18 +151,7 @@ echo "MODEL=$MODEL" > .env
   ```bash
   python3.10 -m venv venv_py310
   source venv_py310/bin/activate
-  ```
-
-  - Linux
-
-  ```bash
   pip install -r requirements.txt
-  ```
-
-  - MacOS
-
-  ```bash
-  pip install -r requirements-osx.txt
   ```
 
 ---
