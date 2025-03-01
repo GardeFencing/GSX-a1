@@ -1,0 +1,12 @@
+GardeRAG
+MiniCPM-V-2_6-gguf
+.vscode
+.mypy_cache
+__pycache__
+models
+uploads
+venv_py310
+VidiQA
+save_context.json
+llama.cpp
+.env

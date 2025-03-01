@@ -4,7 +4,7 @@
 venv*/
 uploads/
 save_context.json
-MiniCPM-*-2_6-gguf/
+models
 benchmark_*.txt
 
 # Byte-compiled / optimized / DLL files

@@ -11,13 +11,16 @@ Reference the MiniCPM Docs: [MiniCPM Docs](https://modelbest.feishu.cn/wiki/C2BW
 
 - [🌟 Features](#features)
 - [🚀 System Requirements](#system-requirements)
-- [⚙️ Installation Guide](#installation-guide)
+- [Initial Setup](#initial-setup)
+  - [1. Clone the Repository](#1-clone-the-repository)
+  - [2. Setup `.env` File](#2-setup-env-file)
+- [⚙️ Source Installation Guide](#source-installation-guide)
   - [1. Install System Dependencies](#1-install-system-dependencies)
-  - [2. Clone the Repository](#2-clone-the-repository)
-  - [3. Clone and Build llama.cpp](#3-clone-and-build-llamacpp)
-  - [4. Download MiniCPM-V Models](#4-download-minicpm-v-models)
-  - [5. Setup Python Environment](#5-setup-python-environment)
-  - [6. Run the Server](#6-run-the-server)
+  - [2. Clone and Build llama.cpp](#2-clone-and-build-llamacpp)
+  - [3. Download MiniCPM-V Models](#3-download-minicpm-v-models)
+  - [4. Setup Python Environment](#4-setup-python-environment)
+  - [5. Run the Server](#5-run-the-server)
+- [🐳 Docker](#docker)
 - [🧪 Testing the Setup](#testing-the-setup)
   - [1. Test llama.cpp Installation](#1-test-llamacpp-installation)
   - [2. Test Web Interface](#2-test-web-interface)
@@ -46,7 +49,36 @@ Reference the MiniCPM Docs: [MiniCPM Docs](https://modelbest.feishu.cn/wiki/C2BW
 
 ---
 
-## Installation Guide
+## Initial Setup
+
+### 1. Clone the Repository
+
+- Clone GSX-a1 repo
+
+  ```bash
+  git clone -b vidiQA_EC2_Branch https://github.com/GardeFencing/GSX-a1.git
+  cd GSX-a1
+  ```
+
+---
+
+## 2. Setup `.env` File
+
+- High Memory/High Performance/High Latency (f16):
+  - ggml-model-f16.gguf
+- Medium Memory/Medium Performance/Medium Latency (Q4):
+  - ggml-model-Q4_K_M.gguf
+- Low Memory/Low Performance/Low Latency (Q2):
+  - ggml-model-Q2_K.gguf
+
+```bash
+export MODEL=<YOUR-MODEL>
+echo "MODEL=$MODEL" > .env
+```
+
+---
+
+## Source Installation Guide
 
 ### 1. Install System Dependencies
 
@@ -87,18 +119,7 @@ Reference the MiniCPM Docs: [MiniCPM Docs](https://modelbest.feishu.cn/wiki/C2BW
 
 ---
 
-### 2. Clone the Repository
-
-- Clone GSX-a1 repo
-
-  ```bash
-  git clone -b vidiQA_EC2_Branch https://github.com/GardeFencing/GSX-a1.git
-  cd GSX-a1
-  ```
-
----
-
-### 3. Clone and Build llama.cpp
+### 2. Clone and Build llama.cpp
 
 - Clone llama.cpp repo with video understanding
 
@@ -110,44 +131,18 @@ Reference the MiniCPM Docs: [MiniCPM Docs](https://modelbest.feishu.cn/wiki/C2BW
 
 ---
 
-### 4. Download MiniCPM-V Models
-
-- If sufficient memory requirements, install full model (f16)
-
-  - High performance
+### 3. Download MiniCPM-V Models
 
   ```bash
   cd ..
   mkdir -p MiniCPM-V-2_6-gguf
-  wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/ggml-model-f16.gguf -O MiniCPM-V-2_6-gguf/ggml-model-f16.gguf
-  wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/mmproj-model-f16.gguf -O MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf
-  ```
-
-- Install quantized model (Q4)
-
-  - Medium performance
-
-  ```bash
-  cd ..
-  mkdir -p MiniCPM-V-2_6-gguf
-  wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/ggml-model-Q4_K_M.gguf -O MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf
-  wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/mmproj-model-f16.gguf -O MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf
-  ```
-
-- If low memory, install more quantized model (Q2)
-
-  - Low performance
-
-  ```bash
-  cd ..
-  mkdir -p MiniCPM-V-2_6-gguf
-  wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/ggml-model-Q2_K.gguf -O MiniCPM-V-2_6-gguf/ggml-model-Q2_K.gguf
-  wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/mmproj-model-f16.gguf
+  wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/$MODEL -O models/MiniCPM-V-2_6-gguf/$MODEL
+  wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/mmproj-model-f16.gguf -O models/MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf
   ```
 
 ---
 
-### 5. Setup Python Environment
+### 4. Setup Python Environment
 
 - Install python deps (server)
 
@@ -170,7 +165,7 @@ Reference the MiniCPM Docs: [MiniCPM Docs](https://modelbest.feishu.cn/wiki/C2BW
 
 ---
 
-### 6. Run the Server
+### 5. Run the Server
 
 - Run the dev server
 
@@ -197,45 +192,11 @@ Reference the MiniCPM Docs: [MiniCPM Docs](https://modelbest.feishu.cn/wiki/C2BW
 
 ### 1. Test llama.cpp Installation
 
-- Test command (f16)
-
   ```bash
   cd llama.cpp
   ./llama-minicpmv-cli \
-    -m ../MiniCPM-V-2_6-gguf/ggml-model-f16.gguf \
-    --mmproj ../MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf \
-    -c 4096 \
-    --temp 0.7 \
-    --top-p 0.8 \
-    --top-k 100 \
-    --repeat-penalty 1.05 \
-    --video ../fencing_trimmed.mp4 \
-    -p "What is happening in this video?"
-  ```
-
-- Test command (Q4)
-
-  ```bash
-  cd llama.cpp
-  ./llama-minicpmv-cli \
-    -m ../MiniCPM-V-2_6-gguf/ggml-model-Q4_K_M.gguf \
-    --mmproj ../MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf \
-    -c 4096 \
-    --temp 0.7 \
-    --top-p 0.8 \
-    --top-k 100 \
-    --repeat-penalty 1.05 \
-    --video ../fencing_trimmed.mp4 \
-    -p "What is happening in this video?"
-  ```
-
-- Test command (Q2)
-
-  ```bash
-  cd llama.cpp
-  ./llama-minicpmv-cli \
-    -m ../MiniCPM-V-2_6-gguf/ggml-model-Q2_K.gguf \
-    --mmproj ../MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf \
+    -m ../models/MiniCPM-V-2_6-gguf/$MODEL \
+    --mmproj ../models/MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf \
     -c 4096 \
     --temp 0.7 \
     --top-p 0.8 \
@@ -252,6 +213,14 @@ Reference the MiniCPM Docs: [MiniCPM Docs](https://modelbest.feishu.cn/wiki/C2BW
 - Open your web browser and navigate to: `http://localhost:5000`
 - **Upload a video**: Select a video file to analyze.
 - **Ask questions**: Interact with the chatbot to ask questions about the video.
+
+---
+
+## Docker
+
+  ```bash
+  docker compose up -d --build
+  ```
 
 ---
 

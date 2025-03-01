@@ -1,0 +1,44 @@
+volumes:
+  minicpm-model:
+    driver: local
+    name: minicpm-model
+  minicpm-redis-data:
+    driver: local
+    name: minicpm-redis-data
+
+networks:
+  app-network:
+    driver: bridge
+
+services:
+  redis:
+    container_name: redis
+    image: redis:latest
+    networks:
+      - app-network
+    volumes:
+      - minicpm-redis-data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  minicpm-server:
+    container_name: minicpm-server
+    build:
+      context: .
+    networks:
+      - app-network
+    volumes:
+      - minicpm-model:/app/models
+    environment:
+      - DOCKER=true
+      - MODEL=${MODEL}
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:8080/health || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    ports:
+      - "8080:8080"

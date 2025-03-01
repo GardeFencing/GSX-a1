@@ -9,9 +9,15 @@ from multiprocessing import Lock
 from uuid import uuid4
 
 import redis
+from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
 
+load_dotenv()
+
 lock = Lock()
+DOCKER: str | None = os.getenv("DOCKER")
+MODEL: str | None = os.getenv("MODEL")
+
 
 # Configure the root logger to DEBUG (or INFO if you want fewer logs)
 logging.basicConfig(level=logging.DEBUG)
@@ -41,10 +47,10 @@ app.config["UPLOAD_FOLDER"] = "uploads"
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100 MB max file size
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
-
+redis_host = "redis" if DOCKER == "true" else "localhost"
 try:
     redis_client = redis.StrictRedis(
-        host="localhost", port=6379, db=0, decode_responses=True
+        host=redis_host, port=6379, db=0, decode_responses=True
     )
     redis_client.ping()
     redis_success = True
@@ -92,10 +98,10 @@ class VideoAnalyzer:
 
         self.llama_cpp_path = os.path.join(script_dir, "llama.cpp")
         self.model_path = os.path.join(
-            script_dir, "MiniCPM-V-2_6-gguf", "ggml-model-Q4_K_M.gguf"
+            script_dir, "models", "MiniCPM-V-2_6-gguf", MODEL
         )
         self.mmproj_path = os.path.join(
-            script_dir, "MiniCPM-V-2_6-gguf", "mmproj-model-f16.gguf"
+            script_dir, "models", "MiniCPM-V-2_6-gguf", "mmproj-model-f16.gguf"
         )
         self.books_dir = os.path.join(script_dir, "GardeRAG", "knowledge_base", "pdfs")
 
@@ -460,5 +466,5 @@ def chat():
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, debug=True)
