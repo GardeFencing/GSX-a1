@@ -345,8 +345,6 @@ def upload_video():
             f"Initial analysis completed successfully. Length: {len(initial_analysis)}"
         )
 
-        logger.info(f"Request took {time.time() - start_time}")
-
         response = {
             "success": True,
             "analysis": initial_analysis,
@@ -357,6 +355,8 @@ def upload_video():
         cache_results(cache_key, response)
 
         logger.info(f"Convo history, {video_analyzer.conversation_history}")
+
+        logger.info(f"Request took {time.time() - start_time}")
 
         return jsonify(response)
 
@@ -413,8 +413,10 @@ def chat():
         if hist not in video_analyzer.conversation_history[session_id]:
             video_analyzer.conversation_history[session_id].append(hist)
 
-        logger.info(f"Request took {time.time() - start_time}")
         logger.info(f"Convo history, {video_analyzer.conversation_history}")
+
+        logger.info(f"Request took {time.time() - start_time}")
+
         return jsonify(cached_results)
 
     try:
@@ -447,13 +449,13 @@ def chat():
         if hist not in video_analyzer.conversation_history[session_id]:
             video_analyzer.conversation_history[session_id].append(hist)
 
-        logger.info(f"Request took {time.time() - start_time}")
-
         response = {"analysis": response, "success": True}
 
         cache_results(cache_key, response)
 
         logger.info(f"Convo history, {video_analyzer.conversation_history}")
+
+        logger.info(f"Request took {time.time() - start_time}")
 
         return jsonify(response)
 
