@@ -1,0 +1,34 @@
+{
+  "name": "gsx-a1",
+  "type": "module",
+  "version": "1.0.0",
+  "description": "**A State-of-the-Art Quantized Multimodal LLM for Generative Sports Analytics**   **VidCLIP Chatbot** — A video analysis chatbot powered by **MiniCPM-V** that can analyze videos and answer questions about them.",
+  "main": "convert-video.js",
+  "directories": {
+    "example": "examples"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GardeFencing/GSX-a1.git"
+  },
+  "author": "Vikram Penumarti",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/GardeFencing/GSX-a1/issues"
+  },
+  "homepage": "https://github.com/GardeFencing/GSX-a1#readme",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.758.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "fluent-ffmpeg": "^2.1.3",
+    "fs-extra": "^11.3.0",
+    "multer": "^1.4.5-lts.1",
+    "p-limit": "^6.2.0",
+    "path": "^0.12.7"
+  }
+}

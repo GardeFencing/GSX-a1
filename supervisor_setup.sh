@@ -1,12 +1,11 @@
 #!/bin/bash
 
-if [ -z "$GSX_A1_PATH" ]; then
-  echo "Error: GSX_A1_PATH is not set."
-  exit 1
-fi
+# Get absolute paths dynamically
+GSX_A1_PATH=$(pwd)
+NODE_PATH=$(command -v node || echo "/usr/bin/node")
 
-# Use sed to replace the placeholder
-sudo sed "s|__GSX_A1_PATH__|$GSX_A1_PATH|g" vidclip.conf > /etc/supervisor/conf.d/vidclip.conf
+# Replace placeholders dynamically
+sudo sed -e "s|__GSX_A1_PATH__|$GSX_A1_PATH|g" -e "s|__NODE_PATH__|$NODE_PATH|g" vidclip.conf | sudo tee /etc/supervisor/conf.d/vidclip.conf > /dev/null
 
 # Reload Supervisor configuration
 sudo supervisorctl reread

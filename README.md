@@ -71,9 +71,28 @@ Reference the MiniCPM Docs: [MiniCPM Docs](https://modelbest.feishu.cn/wiki/C2BW
 - Low Memory/Low Performance/Low Latency (Q2):
   - ggml-model-Q2_K.gguf
 
-```bash
-export $MODEL=<YOUR-MODEL-NAME>
-echo "MODEL=$MODEL" > .env
+```ini
+## DEV
+
+FFMPEG_PATH=/opt/homebrew/bin/ffmpeg
+
+MODEL=ggml-model-Q2_K.gguf
+
+R2_ACCESS_KEY_ID=...
+R2_SECRET_ACCESS_KEY=...
+
+BUCKET_NAME=dev-garde-fencing-videos
+
+## PROD
+
+FFMPEG_PATH=/usr/local/bin/ffmpeg
+
+MODEL=ggml-model-Q4_K_M.gguf
+
+R2_ACCESS_KEY_ID=...
+R2_SECRET_ACCESS_KEY=...
+
+BUCKET_NAME=garde-fencing-videos
 ```
 
 ---
@@ -140,7 +159,7 @@ MODELS:
   ```bash
   cd ..
   mkdir -p ./models/MiniCPM-V-2_6-gguf
-  wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/$MODEL -O ./models/MiniCPM-V-2_6-gguf/$MODEL
+  wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/<YOUR-MODEL> -O ./models/MiniCPM-V-2_6-gguf/<YOUR-MODEL>
   wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/mmproj-model-f16.gguf -O ./models/MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf
   ```
 
@@ -169,8 +188,7 @@ MODELS:
 - Run the prod server
 
   ```bash
-  export GSX_A1_PATH=$(pwd)
-  sudo -E ./supervisor_setup.sh
+  sudo ./supervisor_setup.sh
   ```
 
 - Stop the prod server
@@ -199,7 +217,7 @@ MODELS:
   ```bash
   cd llama.cpp
   ./llama-minicpmv-cli \
-    -m ../models/MiniCPM-V-2_6-gguf/$MODEL \
+    -m ../models/MiniCPM-V-2_6-gguf/<YOUR-MODEL> \
     --mmproj ../models/MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf \
     -c 4096 \
     --temp 0.7 \

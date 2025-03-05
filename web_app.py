@@ -18,13 +18,24 @@ load_dotenv()
 lock = Lock()
 DOCKER: str | None = os.getenv("DOCKER")
 MODEL: str | None = os.getenv("MODEL")
-
+NODE_ENV: str | None = os.getenv("NODE_ENV")
 
 # Configure the root logger to DEBUG (or INFO if you want fewer logs)
 logging.basicConfig(level=logging.DEBUG)
 
 app = Flask(__name__)
-CORS(app)
+
+allowed_origins = (
+    ["http://localhost:3000"] if NODE_ENV == "dev" else ["https://gardeai.com"]
+)
+
+CORS(
+    app,
+    origins=allowed_origins,
+    supports_credentials=True,
+    methods=["POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+)
 
 if "gunicorn" in os.environ.get("SERVER_SOFTWARE", ""):
     # Running under Gunicorn
