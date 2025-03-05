@@ -33,13 +33,18 @@ app.use(
 	}),
 );
 
+app.use((req, res, next) => {
+	console.log(`Incoming request: ${req.method} ${req.url}`);
+	next();
+});
+
 const PORT = process.env.PORT || 4000;
 
 const upload = multer({ storage: multer.memoryStorage() });
 
 app.options("*", cors());
 
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
 	console.log(`Express server running on port ${PORT}`);
 });
 
@@ -47,7 +52,7 @@ ffmpeg.setFfmpegPath(process.env.FFMPEG_PATH);
 const limit = pLimit(5);
 
 app.post(
-	"/api/convert-video/:fencerId?",
+	"/convert-video/:fencerId?",
 	upload.single("video"),
 	async (req, res) => {
 		try {
