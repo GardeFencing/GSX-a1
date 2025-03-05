@@ -72,7 +72,7 @@ Reference the MiniCPM Docs: [MiniCPM Docs](https://modelbest.feishu.cn/wiki/C2BW
   - ggml-model-Q2_K.gguf
 
 ```bash
-export $MODEL=<>
+export $MODEL=<YOUR-MODEL-NAME>
 echo "MODEL=$MODEL" > .env
 ```
 
@@ -122,6 +122,8 @@ echo "MODEL=$MODEL" > .env
 ### 2. Clone and Build llama.cpp
 
 - Clone llama.cpp repo with video understanding
+
+  > Note: There should be **No** warnings/errors in the build process
 
   ```bash
   git clone -b minicpmv-main https://github.com/OpenBMB/llama.cpp.git
