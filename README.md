@@ -85,7 +85,7 @@ BUCKET_NAME=dev-garde-fencing-videos
 
 ## PROD
 
-FFMPEG_PATH=/usr/local/bin/ffmpeg
+FFMPEG_PATH=/usr/bin/ffmpeg
 
 MODEL=ggml-model-Q4_K_M.gguf
 
@@ -108,6 +108,18 @@ BUCKET_NAME=garde-fencing-videos
   ```bash
   sudo apt update
   sudo apt install -y build-essential cmake pkg-config python3.10-dev python3.10-venv ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev ccache redis-server supervisor nginx certbot python3-certbot-nginx
+  ```
+
+  - Node installation
+
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
+  source ~/.bashrc
+  nvm install --lts
+  nvm use --lts
+  nvm alias default lts/*
+  node -v
+  npm -v
   ```
 
 - MaxOS
@@ -165,7 +177,7 @@ MODELS:
 
 ---
 
-### 4. Setup Python Environment
+### 4. Setup Dev Environment
 
 - Install python deps (server)
 
@@ -173,6 +185,12 @@ MODELS:
   python3.10 -m venv venv_py310
   source venv_py310/bin/activate
   pip install -r requirements.txt
+  ```
+
+- Install node deps (server)
+
+  ```bash
+  npm install
   ```
 
 ---
