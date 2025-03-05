@@ -88,7 +88,7 @@ echo "MODEL=$MODEL" > .env
 
   ```bash
   sudo apt update
-  sudo apt install -y build-essential cmake pkg-config python3.10-dev python3.10-venv ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev ccache redis-server supervisor
+  sudo apt install -y build-essential cmake pkg-config python3.10-dev python3.10-venv ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev ccache redis-server supervisor nginx
   ```
 
 - MaxOS
@@ -177,6 +177,25 @@ MODELS:
 
   ```bash
   sudo supervisorctl shutdown
+  ```
+
+### 6. Run the Reverse Proxy
+
+- Initial Config
+
+  ```bash
+  cp nginx.conf /etc/nginx/sites-available/backend
+  sudo nginx -t
+  sudo systemctl restart nginx
+  sudo certbot --nginx -d myec2.duckdns.org
+  ```
+
+- Cert Renewal
+
+  ```bash
+  sudo certbot renew --dry-run
+  sudo crontab -e
+  0 3 * * * certbot renew --quiet && systemctl reload nginx
   ```
 
 ---
