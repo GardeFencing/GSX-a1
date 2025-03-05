@@ -139,9 +139,9 @@ MODELS:
 
   ```bash
   cd ..
-  mkdir -p MiniCPM-V-2_6-gguf
-  wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/$MODEL -O models/MiniCPM-V-2_6-gguf/$MODEL
-  wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/mmproj-model-f16.gguf -O models/MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf
+  mkdir -p ./models/MiniCPM-V-2_6-gguf
+  wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/$MODEL -O ./models/MiniCPM-V-2_6-gguf/$MODEL
+  wget https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/mmproj-model-f16.gguf -O ./models/MiniCPM-V-2_6-gguf/mmproj-model-f16.gguf
   ```
 
 ---
