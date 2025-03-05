@@ -163,7 +163,7 @@ MODELS:
 - Run the dev server
 
   ```bash
-  python server.py
+  python web_app.py
   ```
 
 - Run the prod server
