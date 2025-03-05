@@ -212,7 +212,7 @@ MODELS:
 - Stop the prod server
 
   ```bash
-  sudo supervisorctl shutdown
+  sudo env "PATH=$PATH" ./supervisor_setup.sh
   ```
 
 ### 6. Run the Reverse Proxy

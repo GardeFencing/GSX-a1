@@ -2,7 +2,7 @@
 
 # Get absolute paths dynamically
 GSX_A1_PATH=$(pwd)
-NODE_PATH=$(command -v node || echo "/usr/bin/node")
+NODE_PATH=$(which node || echo "/usr/bin/node")
 
 # Replace placeholders dynamically
 sudo sed "s|__GSX_A1_PATH__|$GSX_A1_PATH|g" vidclip.conf > /etc/supervisor/conf.d/vidclip.conf
