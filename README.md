@@ -187,15 +187,7 @@ MODELS:
   cp nginx.conf /etc/nginx/sites-available/backend
   sudo nginx -t
   sudo systemctl restart nginx
-  sudo certbot --nginx -d garde.duckdns.org
-  ```
-
-- Cert Renewal
-
-  ```bash
-  sudo certbot renew --dry-run
-  sudo crontab -e
-  0 3 * * * certbot renew --quiet && systemctl reload nginx
+  sudo certbot --nginx -d gardeai.duckdns.org
   ```
 
 ---
