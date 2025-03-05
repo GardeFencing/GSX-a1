@@ -187,7 +187,7 @@ MODELS:
   cp nginx.conf /etc/nginx/sites-available/backend
   sudo nginx -t
   sudo systemctl restart nginx
-  sudo certbot --nginx -d gardeai.duckdns.org
+  sudo certbot --nginx -d analyze.gardeai.com
   ```
 
 ---
