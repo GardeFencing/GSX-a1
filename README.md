@@ -88,7 +88,7 @@ echo "MODEL=$MODEL" > .env
 
   ```bash
   sudo apt update
-  sudo apt install -y build-essential cmake pkg-config python3.10-dev python3.10-venv ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev ccache redis-server supervisor nginx
+  sudo apt install -y build-essential cmake pkg-config python3.10-dev python3.10-venv ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev ccache redis-server supervisor nginx certbot python3-certbot-nginx
   ```
 
 - MaxOS
@@ -187,7 +187,7 @@ MODELS:
   cp nginx.conf /etc/nginx/sites-available/backend
   sudo nginx -t
   sudo systemctl restart nginx
-  sudo certbot --nginx -d myec2.duckdns.org
+  sudo certbot --nginx -d garde.duckdns.org
   ```
 
 - Cert Renewal
