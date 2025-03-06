@@ -82,6 +82,8 @@ app.post(
 			await uploadMetadata({}, videoId, fencerId);
 
 			try {
+				console.log("Converting file to webm...\n");
+
 				const webmOutputPath = path.join("/tmp", `webm_output_${videoId}.webm`);
 
 				await transcodeToWebM(tempInputPath, webmOutputPath);
@@ -96,8 +98,10 @@ app.post(
 				);
 
 				await fsPromises.rm(webmOutputPath);
+
+				console.log("Done converting file to webm...\n");
 			} catch (error) {
-				console.error(error);
+				console.error(`Failed to convert webm, uploading original ${error}`);
 				try {
 					await uploadToR2(
 						arrayBuffer,
@@ -107,11 +111,13 @@ app.post(
 						videoFile.type,
 					);
 				} catch (error) {
-					console.error(error);
+					console.error(`Failed to upload original ${error}`);
 				}
 			}
 
 			try {
+				console.log("Converting file to mp4...\n");
+
 				const mp4OutputPath = path.join("/tmp", `mp4_output_${videoId}.mp4`);
 
 				await transcodeToMP4(tempInputPath, mp4OutputPath);
@@ -126,13 +132,17 @@ app.post(
 				);
 
 				await fsPromises.rm(mp4OutputPath);
+
+				console.log("Done converting file to mp4...\n");
 			} catch (error) {
-				console.error(error);
+				console.error(`Failed to convert to mp4 ${error}`);
 			}
 
 			// If hls conversion fails, upload full video to bucket as failsafe so video is not lost
 			let files;
 			try {
+				console.log("Converting to HLS");
+
 				await new Promise((resolve, reject) => {
 					ffmpeg(tempInputPath)
 						.outputOptions([
@@ -175,8 +185,10 @@ app.post(
 						"HLS generation failed: Missing required files in outputDir",
 					);
 				}
+
+				console.log("Done converting to HLS");
 			} catch (error) {
-				console.error(error);
+				console.error(`Failed to convert to HLS ${error}`);
 				return res.status(500).json({ message: "Error converting video" });
 			}
 
@@ -189,8 +201,10 @@ app.post(
 				const buff = await fsPromises.readFile(thumbPath);
 				await uploadThumbnail(buff, videoId, fencerId);
 				await fsPromises.unlink(thumbPath);
+
+				console.log("Done uploading to thumbnail");
 			} catch (error) {
-				console.error(error);
+				console.error(`Failed to upload thumbnail ${error}`);
 				await generateThumbnail(tempInputPath, thumbPath, 0);
 				const buff = await fsPromises.readFile(thumbPath);
 				await uploadThumbnail(buff, videoId, fencerId);
@@ -202,6 +216,7 @@ app.post(
 				const fileBuffer = await fsPromises.readFile(filePath);
 
 				await limit(() => uploadToR2(fileBuffer, videoId, file, fencerId));
+				console.log("Done uploading all files");
 			});
 
 			await Promise.all(uploadPromises);
@@ -223,6 +238,8 @@ app.post(
 			);
 
 			await fsPromises.rmdir(outputDir);
+
+			console.log("Done cleaning up");
 
 			return res.status(201).json({ message: "HLS conversion successful" });
 		} catch (error) {

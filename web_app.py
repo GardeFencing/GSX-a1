@@ -353,6 +353,8 @@ def upload_video():
         if os.path.exists(hash_file):
             os.remove(hash_file)
 
+        logger.info(f"Response {response}")
+
         return jsonify(response)
 
     except Exception as e:
@@ -434,6 +436,8 @@ def chat():
 
         if os.path.exists(hash_file):
             os.remove(hash_file)
+
+        logger.info(f"Response {response}")
 
         return jsonify(response)
 
