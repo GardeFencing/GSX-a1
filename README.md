@@ -203,16 +203,16 @@ MODELS:
   python web_app.py
   ```
 
-- Run the prod server
+- Run/Restart the prod server
 
   ```bash
-  sudo ./supervisor_setup.sh
+  sudo env "PATH=$PATH" ./supervisor_setup.sh
   ```
 
 - Stop the prod server
 
   ```bash
-  sudo env "PATH=$PATH" ./supervisor_setup.sh
+  sudo supervisorctl stop all
   ```
 
 ### 6. Run the Reverse Proxy

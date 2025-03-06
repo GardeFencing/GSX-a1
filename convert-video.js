@@ -114,7 +114,7 @@ app.post(
 			try {
 				const mp4OutputPath = path.join("/tmp", `mp4_output_${videoId}.mp4`);
 
-				await transcodeToWebM(tempInputPath, mp4OutputPath);
+				await transcodeToMP4(tempInputPath, mp4OutputPath);
 				const transcodedBuffer = await fsPromises.readFile(mp4OutputPath);
 
 				await uploadToR2(
