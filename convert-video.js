@@ -3,6 +3,7 @@ import { promises as fsPromises } from "node:fs";
 import path from "node:path";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import pLimit from "p-limit";
+import { fileTypeFromBuffer } from "file-type";
 
 import cors from "cors";
 import dotenv from "dotenv";
@@ -13,25 +14,22 @@ dotenv.config();
 
 const app = express();
 
-const NODE_ENV = process.env.NODE_ENV;
-
-const allowedOrigins =
-	NODE_ENV === "dev" ? ["http://localhost:3000"] : ["https://gardeai.com"];
-
-app.use(
-	cors({
-		origin: (origin, callback) => {
-			if (!origin || allowedOrigins.includes(origin)) {
-				callback(null, true);
-			} else {
-				callback(new Error("Not allowed by CORS"));
-			}
-		},
-		credentials: true,
-		methods: ["POST", "OPTIONS"],
-		allowedHeaders: ["Content-Type", "Authorization"],
-	}),
-);
+if (process.env.NODE_ENV === "dev") {
+	app.use(
+		cors({
+			origin: (origin, callback) => {
+				if (!origin || ["http://localhost:3000"].includes(origin)) {
+					callback(null, true);
+				} else {
+					callback(new Error("Not allowed by CORS"));
+				}
+			},
+			credentials: true,
+			methods: ["POST", "OPTIONS"],
+			allowedHeaders: ["Content-Type", "Authorization"],
+		}),
+	);
+}
 
 app.use((req, res, next) => {
 	console.log(`Incoming request: ${req.method} ${req.url}`);
@@ -62,12 +60,13 @@ app.post(
 			}
 
 			const videoFile = req.file;
+			const arrayBuffer = videoFile.buffer;
 			if (!videoFile) {
 				return res.status(400).json({ message: "No video file uploaded" });
 			}
 
 			const videoId = videoFile.originalname;
-			const fileExtension = path.extname(videoFile.originalname) || ".unknown";
+			const fileExtension = getFileType(arrayBuffer);
 
 			const tempInputPath = path.join(
 				"/tmp",
@@ -77,7 +76,6 @@ app.post(
 			await fsPromises.mkdir(outputDir, { recursive: true });
 
 			// Save the video blob to a file
-			const arrayBuffer = videoFile.buffer;
 			await fsPromises.writeFile(tempInputPath, Buffer.from(arrayBuffer));
 
 			// const metadata = await getVideoMetadata(tempInputPath);
@@ -99,8 +97,8 @@ app.post(
 
 				await fsPromises.rm(webmOutputPath);
 			} catch (error) {
+				console.error(error);
 				try {
-					console.error(error);
 					await uploadToR2(
 						arrayBuffer,
 						videoId,
@@ -111,6 +109,25 @@ app.post(
 				} catch (error) {
 					console.error(error);
 				}
+			}
+
+			try {
+				const mp4OutputPath = path.join("/tmp", `mp4_output_${videoId}.mp4`);
+
+				await transcodeToWebM(tempInputPath, mp4OutputPath);
+				const transcodedBuffer = await fsPromises.readFile(mp4OutputPath);
+
+				await uploadToR2(
+					transcodedBuffer,
+					videoId,
+					"full_video.mp4",
+					fencerId,
+					"video/mp4",
+				);
+
+				await fsPromises.rm(mp4OutputPath);
+			} catch (error) {
+				console.error(error);
 			}
 
 			// If hls conversion fails, upload full video to bucket as failsafe so video is not lost
@@ -227,6 +244,40 @@ async function transcodeToWebM(inputPath, outputPath) {
 			})
 			.save(outputPath);
 	});
+}
+
+async function transcodeToMP4(inputPath, outputPath) {
+	return new Promise((resolve, reject) => {
+		ffmpeg(inputPath)
+			.outputOptions([
+				"-c:v libx264",
+				"-preset fast",
+				"-crf 23",
+				"-c:a aac",
+				"-b:a 128k",
+				"-movflags +faststart",
+			])
+			.on("end", () => {
+				console.log("MP4 transcoding completed.");
+				resolve();
+			})
+			.on("error", (err) => {
+				console.error("Error transcoding to MP4:", err);
+				reject(err);
+			})
+			.save(outputPath);
+	});
+}
+
+async function getFileType(buff) {
+	const fileType = await fileTypeFromBuffer(buff);
+
+	if (fileType) {
+		console.log(`Detected file type: ${fileType.ext} (${fileType.mime})`);
+		return fileType.ext;
+	}
+	console.log("Could not determine file type.");
+	return "unknown";
 }
 
 const uploadToR2 = async (

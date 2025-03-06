@@ -220,7 +220,7 @@ MODELS:
 - Initial Config
 
   ```bash
-  sudo cp nginx.conf /etc/nginx/sites-available/backend
+  sudo cp nginx.conf /etc/nginx/nginx.conf
   sudo nginx -t
   sudo systemctl restart nginx
   sudo certbot --nginx -d analyze.gardeai.com

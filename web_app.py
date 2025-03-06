@@ -25,17 +25,14 @@ logging.basicConfig(level=logging.DEBUG)
 
 app = Flask(__name__)
 
-allowed_origins = (
-    ["http://localhost:3000"] if NODE_ENV == "dev" else ["https://gardeai.com"]
-)
-
-CORS(
-    app,
-    origins=allowed_origins,
-    supports_credentials=True,
-    methods=["POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
-)
+if NODE_ENV == "dev":
+    CORS(
+        app,
+        origins=["http://localhost:3000"],
+        supports_credentials=True,
+        methods=["POST", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization"],
+    )
 
 if "gunicorn" in os.environ.get("SERVER_SOFTWARE", ""):
     # Running under Gunicorn
