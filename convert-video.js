@@ -66,7 +66,7 @@ app.post(
 			const arrayBuffer = videoFile.buffer;
 
 			const videoId = videoFile.originalname;
-			const fileExtension = getFileType(arrayBuffer);
+			const fileExtension = await getFileType(arrayBuffer);
 
 			if (fileExtension === "mp4") {
 				console.log("Uploading mp4...\n");
@@ -136,7 +136,7 @@ app.post(
 			}
 
 			const videoId = videoFile.originalname;
-			const fileExtension = getFileType(arrayBuffer);
+			const fileExtension = await getFileType(arrayBuffer);
 
 			const tempInputPath = path.join(
 				"/tmp",
@@ -266,8 +266,8 @@ app.post(
 				const fileBuffer = await fsPromises.readFile(filePath);
 
 				await limit(() => uploadToR2(fileBuffer, videoId, file, fencerId));
-				console.log("Done uploading all files");
 			});
+			console.log("Done uploading all files");
 
 			await Promise.all(uploadPromises);
 
