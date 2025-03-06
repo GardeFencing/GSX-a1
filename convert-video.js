@@ -50,7 +50,77 @@ ffmpeg.setFfmpegPath(process.env.FFMPEG_PATH);
 const limit = pLimit(5);
 
 app.post(
-	"/convert-video/:fencerId?",
+	"/convert-video/mp4/:fencerId",
+	upload.single("video"),
+	async (req, res) => {
+		try {
+			let { fencerId } = req.params;
+			if (!fencerId || fencerId === "") {
+				fencerId = "no-id";
+			}
+			const videoFile = req.file;
+			res.setHeader("Content-Type", "video/mp4");
+			if (!videoFile) {
+				return res.status(400).json({ message: "No video file uploaded" });
+			}
+			const arrayBuffer = videoFile.buffer;
+
+			const videoId = videoFile.originalname;
+			const fileExtension = getFileType(arrayBuffer);
+
+			if (fileExtension === "mp4") {
+				console.log("Uploading mp4...\n");
+				await uploadToR2(
+					arrayBuffer,
+					videoId,
+					"full_video.mp4",
+					fencerId,
+					"video/mp4",
+				);
+				return res.status(200).send(arrayBuffer);
+			}
+
+			const tempInputPath = path.join(
+				"/tmp",
+				`input_${videoId}.${fileExtension}`,
+			);
+			const outputDir = path.join("/tmp", `hls_output_${videoId}`);
+			await fsPromises.mkdir(outputDir, { recursive: true });
+
+			await fsPromises.writeFile(tempInputPath, Buffer.from(arrayBuffer));
+
+			console.log("Converting file to mp4...\n");
+
+			const mp4OutputPath = path.join("/tmp", `webm_output_${videoId}.mp4`);
+
+			await transcodeToMP4(tempInputPath, mp4OutputPath);
+			const transcodedBuffer = await fsPromises.readFile(mp4OutputPath);
+
+			console.log("Uploading mp4...\n");
+
+			await uploadToR2(
+				transcodedBuffer,
+				videoId,
+				"full_video.mp4",
+				fencerId,
+				"video/mp4",
+			);
+
+			await fsPromises.rm(tempInputPath);
+			await fsPromises.rm(mp4OutputPath);
+
+			console.log("Cleaning up...\n");
+
+			return res.status(200).send(transcodedBuffer);
+		} catch (error) {
+			console.error(`Error converting to mp4 ${error}`);
+			return res.status(500).json({ message: "Error converting video" });
+		}
+	},
+);
+
+app.post(
+	"/convert-video/hls/:fencerId",
 	upload.single("video"),
 	async (req, res) => {
 		try {
@@ -78,16 +148,19 @@ app.post(
 			// Save the video blob to a file
 			await fsPromises.writeFile(tempInputPath, Buffer.from(arrayBuffer));
 
-			// const metadata = await getVideoMetadata(tempInputPath);
-			await uploadMetadata({}, videoId, fencerId);
+			const metadata = await getVideoMetadata(tempInputPath);
+			await uploadMetadata(metadata, videoId, fencerId);
 
 			try {
 				console.log("Converting file to webm...\n");
 
 				const webmOutputPath = path.join("/tmp", `webm_output_${videoId}.webm`);
 
-				await transcodeToWebM(tempInputPath, webmOutputPath);
-				const transcodedBuffer = await fsPromises.readFile(webmOutputPath);
+				let transcodedBuffer = arrayBuffer;
+				if (fileExtension !== "webm") {
+					await transcodeToWebM(tempInputPath, webmOutputPath);
+					transcodedBuffer = await fsPromises.readFile(webmOutputPath);
+				}
 
 				await uploadToR2(
 					transcodedBuffer,
@@ -113,29 +186,6 @@ app.post(
 				} catch (error) {
 					console.error(`Failed to upload original ${error}`);
 				}
-			}
-
-			try {
-				console.log("Converting file to mp4...\n");
-
-				const mp4OutputPath = path.join("/tmp", `mp4_output_${videoId}.mp4`);
-
-				await transcodeToMP4(tempInputPath, mp4OutputPath);
-				const transcodedBuffer = await fsPromises.readFile(mp4OutputPath);
-
-				await uploadToR2(
-					transcodedBuffer,
-					videoId,
-					"full_video.mp4",
-					fencerId,
-					"video/mp4",
-				);
-
-				await fsPromises.rm(mp4OutputPath);
-
-				console.log("Done converting file to mp4...\n");
-			} catch (error) {
-				console.error(`Failed to convert to mp4 ${error}`);
 			}
 
 			// If hls conversion fails, upload full video to bucket as failsafe so video is not lost

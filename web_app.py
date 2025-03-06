@@ -273,10 +273,10 @@ def fetch_video(video_url, save_dir):
         if not os.path.exists(hashed_filename):
             os.rename(temp_file, hashed_filename)
 
-        print(f"Video saved as: {hashed_filename}")
+        logger.info(f"Video saved as: {hashed_filename}")
         return hashed_filename
     except requests.exceptions.RequestException as e:
-        print(f"Failed to fetch video: {e}")
+        logger.exception(f"Failed to fetch video: {e}")
         return None
 
 
@@ -389,7 +389,7 @@ def chat():
     previous_history = data.get("messages", [])
 
     hash_file = fetch_video(video_url, app.config["UPLOAD_FOLDER"])
-    print("HASHED FILE", hash_file)
+    logger.info("HASHED FILE", hash_file)
 
     if not os.path.exists(hash_file):
         return (
