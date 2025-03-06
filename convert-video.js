@@ -170,7 +170,9 @@ app.post(
 					"video/webm",
 				);
 
-				await fsPromises.rm(webmOutputPath);
+				if (fileExtension !== "webm") {
+					await fsPromises.rm(webmOutputPath);
+				}
 
 				console.log("Done converting file to webm...\n");
 			} catch (error) {
