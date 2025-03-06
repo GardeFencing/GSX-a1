@@ -242,12 +242,12 @@ class VideoAnalyzer:
 video_analyzer = VideoAnalyzer()
 
 
-@app.route("/")
+@app.route("/analyze")
 def index():
     return render_template("index.html")
 
 
-@app.route("/health")
+@app.route("/analyze/health")
 def health():
     return jsonify({"success": True})
 
@@ -283,7 +283,7 @@ def fetch_video(video_url, save_dir):
         return None
 
 
-@app.route("/upload", methods=["POST"])
+@app.route("/analyze/upload", methods=["POST"])
 def upload_video():
     start_time = time.time()
 
@@ -377,7 +377,7 @@ def format_conversation_history(conversation_history):
     return formatted_history.strip()
 
 
-@app.route("/chat", methods=["POST"])
+@app.route("/analyze/chat", methods=["POST"])
 def chat():
     start_time = time.time()
 
