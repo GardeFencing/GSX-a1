@@ -389,7 +389,7 @@ def chat():
     previous_history = data.get("messages", [])
 
     hash_file = fetch_video(video_url, app.config["UPLOAD_FOLDER"])
-    logger.info("HASHED FILE", hash_file)
+    logger.info(f"HASHED FILE {hash_file}")
 
     if not os.path.exists(hash_file):
         return (
