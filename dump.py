@@ -9,7 +9,14 @@ keys = redis_client.keys("*")
 data = {}
 
 for key in keys:
-    data[key] = redis_client.get(key)
+    value = redis_client.get(key)
+
+    try:
+        value = json.loads(value)
+    except json.JSONDecodeError:
+        pass
+
+    data[key] = value
 
 with open("redis_dump.json", "w") as json_file:
     json.dump(data, json_file, indent=2)
