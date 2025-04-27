@@ -256,11 +256,20 @@ app.post(
 
 				console.log("Done uploading to thumbnail");
 			} catch (error) {
-				console.error(`Failed to upload thumbnail ${error}`);
-				await generateThumbnail(tempInputPath, thumbPath, 0);
-				const buff = await fsPromises.readFile(thumbPath);
-				await uploadThumbnail(buff, videoId, fencerId);
-				await fsPromises.unlink(thumbPath);
+				console.error(`Failed to upload thumbnail in first pass: ${error}`);
+
+				try {
+					await generateThumbnail(tempInputPath, thumbPath, 0);
+					await fsPromises.access(thumbPath);
+					const buff2 = await fsPromises.readFile(thumbPath);
+					await uploadThumbnail(buff2, videoId, fencerId);
+				} catch (fallbackErr) {
+					console.error(
+						`Fallback thumbnail generation also failed: ${fallbackErr}`,
+					);
+				} finally {
+					await fsPromises.unlink(thumbPath).catch(() => {});
+				}
 			}
 
 			const uploadPromises = files.map(async (file) => {
